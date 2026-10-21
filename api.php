@@ -20,7 +20,7 @@ function fail($msg, $code = 400) {
 }
 set_exception_handler(function ($ex) {
     if ($ex instanceof mysqli_sql_exception) {
-        if ($ex->getCode() == 1451) fail("Cannot delete: this record is still used by other data", 409);
+        if ($ex->getCode() == 1451) fail("Records are never deleted. Archive it instead", 409);
         if ($ex->getCode() == 1062) fail("That value already exists (duplicate SKU, name or email)", 409);
         if (in_array($ex->getCode(), [3819, 4025])) fail("A value was rejected by the database rules", 422);
     }
@@ -45,6 +45,10 @@ function run($sql, $types = "", $args = []) {
     return $st;
 }
 
+/* created / updated / archived dates sent with every record list (system rule: track dates) */
+const DT  = "DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') cr, DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i') up";
+const DTA = DT . ", DATE_FORMAT(archived_at, '%Y-%m-%d %H:%i') ar";
+
 /* ---------- roles and permissions (same matrix as app.js) ---------- */
 $ROLE_KEY = [1 => "admin", 2 => "manager", 3 => "inventory", 4 => "cashier"];
 $ROLE_ID  = array_flip($ROLE_KEY);
@@ -53,15 +57,7 @@ $CAN = [
     "users"  => ["admin"],
     "stock"  => ["admin", "inventory"],
     "sell"   => ["admin", "cashier"],
-    "archive"   => ["admin"],                          // archive / restore records
-    "customers" => ["admin", "manager", "cashier"],    // add / edit customer records
 ];
-/* ROLE RESPONSIBILITIES
-   admin     : everything, including employees, roles, archive/restore.
-   manager   : catalog (products, prices, categories, suppliers) and customers; views sales, stock and reports.
-               Cannot sell, change stock quantities, archive/restore or manage employees.
-   inventory : receives/issues stock and count adjustments. Cannot change the catalog or sell.
-   cashier   : processes sales for registered customers and maintains customer records. */
 
 function current_user() {
     global $ROLE_KEY;
@@ -69,7 +65,7 @@ function current_user() {
     if ($u !== false) return $u;
     $u = null;
     if (!empty($_SESSION["uid"])) {
-        $r = rows("SELECT user_id, full_name, username, email, phone, job_title, role_id, status FROM users WHERE user_id = ?", "i", [$_SESSION["uid"]])[0] ?? null;
+        $r = rows("SELECT user_id, full_name, username, email, phone, job_title, role_id, status, " . DT . " FROM users WHERE user_id = ?", "i", [$_SESSION["uid"]])[0] ?? null;
         if ($r && $r["status"] === "Active") {
             $u = [
                 "id"       => (int)$r["user_id"],
@@ -79,6 +75,8 @@ function current_user() {
                 "phone"    => $r["phone"] ?? "",
                 "title"    => $r["job_title"] ?? "",
                 "role"     => $ROLE_KEY[(int)$r["role_id"]],
+                "cr"       => $r["cr"],
+                "up"       => $r["up"],
             ];
         }
     }
@@ -89,6 +87,8 @@ function need($perm = null) {
     $u = current_user();
     if (!$u) fail("Please sign in", 401);
     if ($perm && !in_array($u["role"], $CAN[$perm])) fail("Permission denied: your role cannot do this", 403);
+    global $conn;
+    $conn->query("SET @app_user_id = " . (int)$u["id"]); // lets the history triggers record who made each change
     return $u;
 }
 
@@ -143,9 +143,9 @@ function valid_ph_phone($p) { return preg_match('/^09\d{9}$/', $p) === 1; } // 0
    Records are never removed. Archiving sets archived_at; restoring clears it.
    Requires the archived_at columns defined in stockkeeper.sql. */
 $ARCHIVABLE = [
-    "product"  => ["products",   "product_id",  "archive"],
-    "category" => ["categories", "category_id", "archive"],
-    "supplier" => ["suppliers",  "supplier_id", "archive"],
+    "product"  => ["products",   "product_id",  "manage"],
+    "category" => ["categories", "category_id", "manage"],
+    "supplier" => ["suppliers",  "supplier_id", "manage"],
 ];
 if (preg_match('/^(archive|restore)_([a-z]+)$/', $action, $m) && isset($ARCHIVABLE[$m[2]])) {
     $doArchive = $m[1] === "archive";
@@ -250,55 +250,51 @@ case "bootstrap":
     $data = [];
 
     // "arch" = true when the record is archived (hidden by default, restorable)
-    $data["cats"] = array_map(fn($r) => ["id" => (int)$r["category_id"], "name" => $r["category_name"], "desc" => $r["description"] ?? "", "arch" => (bool)$r["arch"]],
-        rows("SELECT category_id, category_name, description, archived_at IS NOT NULL AS arch FROM categories ORDER BY category_id DESC"));
+    $data["cats"] = array_map(fn($r) => ["id" => (int)$r["category_id"], "name" => $r["category_name"], "desc" => $r["description"] ?? "", "arch" => (bool)$r["arch"], "cr" => $r["cr"], "up" => $r["up"], "ar" => $r["ar"]],
+        rows("SELECT category_id, category_name, description, archived_at IS NOT NULL AS arch, " . DTA . " FROM categories ORDER BY category_id DESC"));
 
     $data["sup"] = array_map(fn($r) => ["id" => (int)$r["supplier_id"], "name" => $r["company_name"], "contact" => $r["contact_person"],
-        "phone" => $r["phone"], "email" => $r["email"] ?? "", "street" => $r["street"] ?? "", "brgy" => $r["barangay"],
-        "city" => $r["city"], "prov" => $r["province"], "arch" => (bool)$r["arch"]],
-        rows("SELECT supplier_id, company_name, contact_person, phone, email, street, barangay, city, province, archived_at IS NOT NULL AS arch FROM suppliers ORDER BY supplier_id DESC"));
-
-    // customers: only roles that may work with them receive the list
-    $data["cust"] = [];
-    if (in_array($u["role"], $CAN["customers"])) {
-        $data["cust"] = array_map(fn($r) => ["id" => (int)$r["customer_id"], "name" => $r["customer_name"], "phone" => $r["phone"],
-            "street" => $r["street"] ?? "", "brgy" => $r["barangay"], "city" => $r["city"], "prov" => $r["province"]],
-            rows("SELECT customer_id, customer_name, phone, street, barangay, city, province FROM customers ORDER BY customer_id DESC"));
-    }
+        "phone" => $r["phone"], "email" => $r["email"] ?? "", "city" => $r["address"], "arch" => (bool)$r["arch"]],
+        rows("SELECT supplier_id, company_name, contact_person, phone, email, address, archived_at IS NOT NULL AS arch FROM suppliers ORDER BY supplier_id DESC"));
 
     $data["prod"] = array_map(fn($r) => ["id" => (int)$r["product_id"], "sku" => $r["sku"], "name" => $r["product_name"],
         "cat" => (int)$r["category_id"], "sup" => (int)$r["supplier_id"], "price" => (float)$r["unit_price"],
-        "stock" => (int)$r["stock_quantity"], "min" => (int)$r["reorder_level"], "unit" => $r["unit"], "arch" => (bool)$r["arch"]],
-        rows("SELECT product_id, sku, product_name, category_id, supplier_id, unit_price, stock_quantity, reorder_level, unit, archived_at IS NOT NULL AS arch
+        "stock" => (int)$r["stock_quantity"], "min" => (int)$r["reorder_level"], "unit" => $r["unit"], "arch" => (bool)$r["arch"], "cr" => $r["cr"], "up" => $r["up"], "ar" => $r["ar"]],
+        rows("SELECT product_id, sku, product_name, category_id, supplier_id, unit_price, stock_quantity, reorder_level, unit, archived_at IS NOT NULL AS arch, " . DTA . "
               FROM products ORDER BY product_id DESC"));
 
     $data["mov"] = array_map(fn($r) => ["id" => (int)$r["movement_id"], "date" => $r["d"], "pid" => (int)$r["product_id"],
         "type" => substr($r["movement_type"], -2) === "IN" ? "IN" : "OUT", "qty" => (int)$r["quantity"],
-        "adj" => str_starts_with($r["movement_type"], "ADJ"), "note" => $r["remarks"] ?: "—", "by" => $r["full_name"]],
+        "note" => $r["remarks"] ?: "—", "by" => $r["full_name"]],
         rows("SELECT m.movement_id, DATE_FORMAT(m.movement_date, '%Y-%m-%d %H:%i') d, m.product_id, m.movement_type, m.quantity, m.remarks, u.full_name
               FROM inventory_movements m JOIN users u ON u.user_id = m.user_id
               ORDER BY m.movement_date, m.movement_id"));
 
+    $data["cust"] = array_map(fn($r) => ["id" => (int)$r["customer_id"], "name" => $r["customer_name"], "phone" => $r["phone"],
+        "street" => $r["street"] ?? "", "brgy" => $r["barangay"], "city" => $r["city"], "prov" => $r["province"],
+        "arch" => (bool)$r["arch"], "cr" => $r["cr"], "up" => $r["up"], "ar" => $r["ar"]],
+        rows("SELECT customer_id, customer_name, phone, street, barangay, city, province, archived_at IS NOT NULL AS arch, " . DTA . " FROM customers ORDER BY customer_id DESC"));
+
     $items = [];
-    foreach (rows("SELECT sale_id, product_id, quantity, unit_price FROM sale_items ORDER BY sale_item_id") as $r) {
-        $items[(int)$r["sale_id"]][] = ["pid" => (int)$r["product_id"], "qty" => (int)$r["quantity"], "price" => (float)$r["unit_price"]];
+    foreach (rows("SELECT sale_id, product_id, product_name, quantity, unit_price FROM sale_items ORDER BY sale_item_id") as $r) {
+        $items[(int)$r["sale_id"]][] = ["pid" => (int)$r["product_id"], "name" => $r["product_name"], "qty" => (int)$r["quantity"], "price" => (float)$r["unit_price"]];
     }
-    $data["sales"] = array_map(fn($r) => ["id" => $r["receipt_number"], "date" => $r["d"], "cid" => (int)$r["customer_id"], "cust" => $r["customer_name"],
+    $data["sales"] = array_map(fn($r) => ["id" => $r["receipt_number"], "date" => $r["d"], "cust" => $r["customer_name"],
         "pay" => $r["payment_method"], "by" => $r["full_name"], "items" => $items[(int)$r["sale_id"]] ?? []],
-        rows("SELECT s.sale_id, s.receipt_number, DATE_FORMAT(s.sale_date, '%Y-%m-%d %H:%i') d, s.customer_id, c.customer_name, s.payment_method, u.full_name
-              FROM sales s JOIN users u ON u.user_id = s.user_id JOIN customers c ON c.customer_id = s.customer_id
+        rows("SELECT s.sale_id, s.receipt_number, DATE_FORMAT(s.sale_date, '%Y-%m-%d %H:%i') d, s.customer_name, s.payment_method, u.full_name
+              FROM sales s JOIN users u ON u.user_id = s.user_id
               ORDER BY s.sale_date, s.sale_id"));
 
-    $s = rows("SELECT store_name, tax_rate, reorder_level, receipt_footer FROM settings WHERE setting_id = 1")[0]
+    $s = rows("SELECT store_name, tax_rate, reorder_level, receipt_footer, " . DT . " FROM settings WHERE setting_id = 1")[0]
          ?? ["store_name" => "Stock Keeper", "tax_rate" => 12, "reorder_level" => 20, "receipt_footer" => ""];
-    $data["set"] = ["store" => $s["store_name"], "tax" => (float)$s["tax_rate"], "reorder" => (int)$s["reorder_level"], "footer" => $s["receipt_footer"] ?? ""];
+    $data["set"] = ["store" => $s["store_name"], "tax" => (float)$s["tax_rate"], "reorder" => (int)$s["reorder_level"], "footer" => $s["receipt_footer"] ?? "", "cr" => $s["cr"] ?? "", "up" => $s["up"] ?? ""];
 
     // employees and logs are only sent to roles that can see them
     $data["emp"] = [];
     if ($u["role"] === "admin") {
         $data["emp"] = array_map(fn($r) => ["id" => (int)$r["user_id"], "name" => $r["full_name"], "title" => $r["job_title"] ?? "",
-            "role" => $ROLE_KEY[(int)$r["role_id"]], "phone" => $r["phone"] ?: "—", "status" => $r["status"]],
-            rows("SELECT user_id, full_name, job_title, role_id, phone, status FROM users ORDER BY user_id DESC"));
+            "role" => $ROLE_KEY[(int)$r["role_id"]], "phone" => $r["phone"] ?: "—", "status" => $r["status"], "cr" => $r["cr"], "up" => $r["up"]],
+            rows("SELECT user_id, full_name, job_title, role_id, phone, status, " . DT . " FROM users ORDER BY user_id DESC"));
     }
     $data["logs"] = [];
     if (in_array($u["role"], ["admin", "manager"])) {
@@ -308,6 +304,15 @@ case "bootstrap":
                     SELECT l.log_id, DATE_FORMAT(l.date_created, '%Y-%m-%d %H:%i') d, u.full_name, u.role_id, l.description
                     FROM activity_logs l LEFT JOIN users u ON u.user_id = l.user_id
                     ORDER BY l.log_id DESC LIMIT 300) t ORDER BY log_id"));
+    }
+    $data["hist"] = [];
+    if (in_array($u["role"], ["admin", "manager"])) {
+        $data["hist"] = array_map(fn($r) => ["t" => $r["d"], "tbl" => $r["table_name"], "id" => (int)$r["record_id"], "type" => $r["change_type"],
+            "old" => json_decode($r["old_values"], true) ?: [], "new" => json_decode($r["new_values"], true) ?: [], "u" => $r["full_name"] ?? "System"],
+            rows("SELECT h.history_id, h.table_name, h.record_id, h.change_type, DATE_FORMAT(h.changed_at, '%Y-%m-%d %H:%i') d, h.old_values, h.new_values, u.full_name
+                  FROM record_history h LEFT JOIN users u ON u.user_id = h.changed_by
+                  WHERE " . ($u["role"] === "admin" ? "1 = 1" : "h.table_name <> 'users'") . "
+                  ORDER BY h.history_id DESC LIMIT 500"));
     }
     out(["user" => $u, "data" => $data]);
 
@@ -388,6 +393,25 @@ case "save_customer":
     $brgy = $str("brgy", 80); $city = $str("city", 80); $prov = $str("prov", 80);
     $street = $street === "" ? null : $street;
     if ($name === "" || $phone === "" || $brgy === "" || $city === "" || $prov === "") fail("Name, phone, barangay, city and province are required");
+    if (!valid_ph_phone($phone)) fail("Enter a valid Philippine mobile number (09XXXXXXXXX)");
+    if ($id) {
+        if (!rows("SELECT 1 FROM customers WHERE customer_id = ?", "i", [$id])) fail("Customer not found", 404);
+        run("UPDATE customers SET customer_name=?, phone=?, street=?, barangay=?, city=?, province=? WHERE customer_id=?",
+            "ssssssi", [$name, $phone, $street, $brgy, $city, $prov, $id]);
+    } else {
+        run("INSERT INTO customers (customer_name, phone, street, barangay, city, province) VALUES (?, ?, ?, ?, ?, ?)",
+            "ssssss", [$name, $phone, $street, $brgy, $city, $prov]);
+    }
+    out(["ok" => true]);
+
+/* ====================== CUSTOMERS ====================== */
+case "save_customer":
+    need("customers");
+    $id = (int)($in["id"] ?? 0);
+    $name = $str("name", 120); $phone = $str("phone", 30);
+    $street = $str("street", 150); $brgy = $str("brgy", 80); $city = $str("city", 80); $prov = $str("prov", 80);
+    $street = $street === "" ? null : $street;
+    if ($name === "" || $phone === "" || $brgy === "" || $city === "" || $prov === "") fail("Name, mobile number, barangay, city and province are required");
     if (!valid_ph_phone($phone)) fail("Enter a valid Philippine mobile number (09XXXXXXXXX)");
     if ($id) {
         if (!rows("SELECT 1 FROM customers WHERE customer_id = ?", "i", [$id])) fail("Customer not found", 404);
@@ -484,8 +508,7 @@ case "adjust_stock":
 /* ====================== SALES ====================== */
 case "add_sale":
     $u = need("sell");
-    $cid = (int)($in["cid"] ?? 0); // every sale must be linked to a registered customer
-    if ($cid < 1 || !rows("SELECT 1 FROM customers WHERE customer_id = ?", "i", [$cid])) fail("Choose a customer for this sale");
+    $cust = $str("cust", 120) ?: "Walk-in";
     $pid = (int)($in["pid"] ?? 0);
     $qty = (int)($in["qty"] ?? 0);
     $pay = $str("pay", 20);
@@ -498,8 +521,8 @@ case "add_sale":
     if ($qty > (int)$p["stock_quantity"]) fail("Only " . $p["stock_quantity"] . " in stock", 422);
     $n = (int)rows("SELECT COALESCE(MAX(CAST(SUBSTRING(receipt_number, 3) AS UNSIGNED)), 1000) + 1 AS n FROM sales")[0]["n"];
     $receipt = "S-" . $n;
-    run("INSERT INTO sales (receipt_number, user_id, customer_id, payment_method, total_amount) VALUES (?, ?, ?, ?, 0)",
-        "siis", [$receipt, $u["id"], $cid, $pay]);
+    run("INSERT INTO sales (receipt_number, user_id, customer_name, payment_method, total_amount) VALUES (?, ?, ?, ?, 0)",
+        "siss", [$receipt, $u["id"], $cust, $pay]);
     $saleId = $conn->insert_id;
     run("INSERT INTO sale_items (sale_id, product_id, quantity, unit_price) VALUES (?, ?, ?, ?)",
         "iiid", [$saleId, $pid, $qty, $p["unit_price"]]);

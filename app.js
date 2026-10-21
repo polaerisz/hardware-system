@@ -64,9 +64,6 @@ const db = {
   logs: [],
   set: { store: "Stock Keeper", tax: 12, reorder: 20, footer: "" },
 };
-/* Address is stored in separate columns: street (optional), barangay, city, province */
-const addr = (x) =>
-  [x.street, x.brgy && "Brgy. " + x.brgy, x.city, x.prov].filter(Boolean).join(", ");
 const P = (id) => db.prod.find((p) => p.id === id) || {};
 const total = (s) => s.items.reduce((a, i) => a + i.qty * i.price, 0);
 const nm = (l, id) => (db[l].find((x) => x.id === id) || { name: "—" }).name;
@@ -151,6 +148,10 @@ const arf = (sel) => {
   return (x) => v == "all" || (v == "arch" ? !!x.arch : !x.arch);
 };
 const archRow = (x) => (x.arch ? "arch" : "");
+/* Added / updated (and archived) dates shown on every record list */
+const dts = (x) =>
+  `<div class="mu2">Added ${e(x.cr || "—")}</div><div class="mu2">Updated ${e(x.up || "—")}</div>` +
+  (x.ar ? `<div class="mu2">Archived ${e(x.ar)}</div>` : "");
 const archTag = (x) => (x.arch ? ' <span class="tg">Archived</span>' : "");
 const archEmpty = (sel, what) =>
   $(sel).value == "arch" ? `No archived ${what}.` : null;
@@ -218,10 +219,8 @@ function openForm(title, fs, vals, save) {
   const touched = new Set();
   /* returns true when the field is INVALID, and paints/clears the red state */
   const check = (f, d) => {
-    const el = fm.elements[f.n],
-      x = d[f.n],
-      empty = x === "" || Number.isNaN(x),
-      bad = f.t == "number" && el.validity.badInput; /* e.g. "abc" typed into a number box */
+    const x = d[f.n],
+      empty = x === "" || Number.isNaN(x);
     let m = "";
     if (bad) m = "Enter a valid number";
     else if (empty && !f.opt) m = "This field is required";
@@ -285,24 +284,6 @@ function openForm(title, fs, vals, save) {
 }
 
 /* ============ CRUD: products, categories, suppliers ============ */
-function nextSku(cid) {
-  const cat = db.cats.find((c) => c.id === cid);
-  if (!cat) return "";
-  const same = db.prod.find((p) => p.cat === cid && p.sku.includes("-"));
-  let pre;
-  if (same) pre = same.sku.split("-")[0];
-  else {
-    const w = cat.name.split(/[^A-Za-z]+/).filter(Boolean);
-    pre = (w.length > 1 ? w[0][0] + w[1][0] : (w[0] || "XX").slice(0, 2)).toUpperCase();
-  }
-  const top = Math.max(
-    cid * 1000,
-    ...db.prod
-      .filter((p) => p.sku.startsWith(pre + "-"))
-      .map((p) => parseInt(p.sku.split("-")[1], 10) || 0),
-  );
-  return pre + "-" + (top + 1);
-}
 const S = {
   prod: {
     k: "prod",
@@ -363,24 +344,9 @@ const S = {
     f: () => [
       { n: "name", l: "Company", ph: "e.g. Calamba Cement & Masonry Depot" },
       { n: "contact", l: "Contact person", ph: "e.g. Juan Dela Cruz" },
-      { n: "street", l: "Street / building (optional)", ph: "e.g. National Highway", opt: 1 },
-      { n: "brgy", l: "Barangay", ph: "e.g. Real" },
-      { n: "city", l: "City", ph: "e.g. Calamba City" },
-      { n: "prov", l: "Province", ph: "e.g. Laguna" },
+      { n: "city", l: "City / Province", ph: "e.g. Calamba City, Laguna" },
       { n: "phone", l: "Phone", t: "tel", ph: "09XXXXXXXXX" },
       { n: "email", l: "Email", t: "email", ph: "name@company.com" },
-    ],
-  },
-  cust: {
-    k: "cust",
-    t: "Customer",
-    f: () => [
-      { n: "name", l: "Customer name", ph: "e.g. Engr. Ramon Villanueva" },
-      { n: "phone", l: "Mobile number", t: "tel", ph: "09XXXXXXXXX" },
-      { n: "street", l: "Street / building (optional)", ph: "e.g. National Highway", opt: 1 },
-      { n: "brgy", l: "Barangay", ph: "e.g. Halang" },
-      { n: "city", l: "City", ph: "e.g. Calamba City" },
-      { n: "prov", l: "Province", ph: "e.g. Laguna" },
     ],
   },
 };
@@ -403,9 +369,6 @@ function edit(s, id) {
         ? { min: db.set.reorder, sku: nextSku((db.cats[0] || {}).id) }
         : {};
   const fs = c.f();
-  // Only administrators and inventory staff may set stock quantities
-  if (s == "prod" && !can("stock"))
-    fs.splice(fs.findIndex((f) => f.n == "stock"), 1);
   if (s == "emp" && !id)
     fs.push({
       n: "pw",
@@ -419,9 +382,7 @@ function edit(s, id) {
     if (!j) return;
     await load();
     show(cur);
-    toast(
-      c.t + (id ? " updated: " : " added: ") + d.name + (j.sku && !id ? " (SKU " + j.sku + ")" : ""),
-    );
+    toast(c.t + (id ? " updated: " : " added: ") + d.name);
   });
   if (s == "prod" && !id)
     dlg.querySelector('[name="cat"]').onchange = (ev) =>
@@ -442,7 +403,9 @@ function archive(s, id) {
   const note =
     s == "prod"
       ? "It will be hidden from sales, stock forms and reports."
-      : "It will be hidden from lists and forms.";
+      : s == "cust"
+        ? "It will no longer be offered when making a sale. Past sales keep the customer name."
+        : "It will be hidden from lists and forms.";
   ask(
     `Archive <b>${e(it.name)}</b>? ${note} Nothing is deleted. You can restore it any time by switching the filter to Archived.`,
     async () => {
@@ -592,6 +555,7 @@ function rProd() {
       ["Price", (p) => money(p.price), "m"],
       ["Stock level", (p) => stk(p)],
       ["Status", (p) => bdg(p)],
+      ["Added / updated", dts],
       ["", (p) => prodActs(p.id), "act"],
     ],
     rows,
@@ -610,6 +574,7 @@ function rCat() {
         (c) => actv("prod").filter((p) => p.cat === c.id).length,
         "m",
       ],
+      ["Added / updated", dts],
       ["", (c) => acts("cat", c.id), "act"],
     ],
     db.cats.filter(arf("#ca")),
@@ -637,86 +602,11 @@ function rSup() {
         (s) => actv("prod").filter((p) => p.sup === s.id).length,
         "m",
       ],
-      [
-        "",
-        (s) =>
-          `<button class="b s" data-a="supd" data-id="${s.id}">Details</button> ` +
-          acts("sup", s.id),
-        "act",
-      ],
+      ["", (s) => acts("sup", s.id), "act"],
     ],
     db.sup.filter(arf("#sa")),
     archEmpty("#sa", "suppliers") || "No suppliers yet.",
     archRow,
-  );
-}
-function supInfo(id) {
-  const s = db.sup.find((x) => x.id === id);
-  if (!s) return;
-  const ps = db.prod.filter((p) => p.sup === id),
-    h = db.mov
-      .filter((m) => m.type == "IN" && !m.adj && P(m.pid).sup === id)
-      .slice()
-      .reverse(),
-    qty = h.reduce((a, m) => a + m.qty, 0);
-  dlg.className = "wide";
-  dlg.innerHTML = `<h3>${e(s.name)}</h3>
-<div class="tw"><table><tbody>${[
-    ["Contact person", e(s.contact)],
-    ["Phone", e(s.phone)],
-    ["Email", e(s.email || "—")],
-    ["Address", e(addr(s) || "—")],
-    ["Products supplied", ps.length ? ps.map((p) => e(p.name)).join(", ") : "—"],
-  ]
-    .map((r) => `<tr><td><b>${r[0]}</b></td><td>${r[1]}</td></tr>`)
-    .join("")}</tbody></table></div>
-<h3 class="sh">Supplier history</h3>
-<p class="mu">${h.length ? `${h.length} deliver${h.length > 1 ? "ies" : "y"} · ${qty} units received · last on ${h[0].date}` : "No deliveries recorded yet."}</p>
-${
-  h.length
-    ? `<div class="tw hist"><table><thead><tr><th>Date</th><th>Product</th><th>Qty</th><th>Reference</th><th>Received by</th></tr></thead><tbody>${h
-        .map(
-          (m) =>
-            `<tr><td class="m">${m.date}</td><td>${e(P(m.pid).name || "—")}</td><td class="m">+${m.qty}</td><td>${e(m.note)}</td><td>${e(m.by || "—")}</td></tr>`,
-        )
-        .join("")}</tbody></table></div>`
-    : ""
-}
-<div class="ft"><button class="b p" data-x>Close</button></div>`;
-  dlg.showModal();
-}
-function rCust() {
-  const q = $("#cq").value.toLowerCase(),
-    mine = (c) => db.sales.filter((s) => s.cid === c.id);
-  tbl(
-    "#cutbl",
-    [
-      [
-        "Customer",
-        (c) =>
-          `<div class="pn"><span class="ch" data-st="--c:${cc(c.id)}"><span class="ms">person</span></span><b>${e(c.name)}</b></div>`,
-      ],
-      ["Mobile", (c) => e(c.phone || "—"), "m"],
-      ["Barangay", (c) => e(c.brgy)],
-      ["City", (c) => e(c.city)],
-      ["Province", (c) => e(c.prov)],
-      ["Sales", (c) => mine(c).length, "m"],
-      [
-        "Total purchases",
-        (c) => money(mine(c).reduce((a, s) => a + total(s), 0)),
-        "m",
-      ],
-      [
-        "",
-        (c) =>
-          can("customers")
-            ? `<button class="b s" data-a="edit" data-s="cust" data-id="${c.id}">Edit</button>`
-            : "",
-        "act",
-      ],
-    ],
-    db.cust.filter((c) => (c.name + " " + addr(c)).toLowerCase().includes(q)),
-    "No customers match your search. Add a customer to start selling.",
   );
 }
 function rMov() {
@@ -750,7 +640,7 @@ function rSales() {
 function rRep() {
   const rows = actv("prod")
     .slice()
-    .sort((a, b) => a.sku.localeCompare(b.sku));
+    .sort((a, b) => b.id - a.id); /* newest first */
   tbl(
     "#rinv",
     [
@@ -854,19 +744,10 @@ function mvForm(type) {
 
 /* ============ SALES ============ */
 function newSale() {
-  if (!db.cust.length)
-    return toast("Add a customer first (Customers page). Every sale needs a customer.", "bad");
   openForm(
     "New sale",
     [
-      {
-        n: "cid",
-        l: "Customer",
-        t: "select",
-        num: 1,
-        ph: "Select a customer",
-        o: db.cust.map((c) => [c.id, `${c.name} – ${c.city}`]),
-      },
+      { n: "cust", l: "Customer", ph: "e.g. Walk-in or customer name" },
       {
         n: "pid",
         l: "Product",
@@ -914,7 +795,7 @@ function newSale() {
 }
 function saleInfo(id) {
   const s = db.sales.find((x) => x.id == id);
-  dlg.innerHTML = `<h3>Receipt ${s.id}</h3><p class="mu" data-st="margin:0 0 12px">${s.date} · ${e(s.cust)} · ${e(s.pay)}</p><div class="tw"><table><thead><tr><th>Item</th><th>Qty</th><th>Price</th><th>Subtotal</th></tr></thead><tbody>${s.items.map((i) => `<tr><td>${e(P(i.pid).name || "—")}</td><td class="m">${i.qty}</td><td class="m">${money(i.price)}</td><td class="m">${money(i.qty * i.price)}</td></tr>`).join("")}</tbody></table></div><h3 data-st="margin-top:14px">Total ${money(total(s))}</h3><p class="mu" data-st="margin:4px 0 0">Includes ${db.set.tax}% VAT: ${money((total(s) * db.set.tax) / (100 + db.set.tax))} · Cashier: ${e(s.by || "—")}</p><div class="ft"><button class="b" data-a="exp" data-t="receipt ${s.id}">Print receipt</button><button class="b p" data-x>Close</button></div>`;
+  dlg.innerHTML = `<h3>Receipt ${s.id}</h3><p class="mu" data-st="margin:0 0 12px">${s.date} · ${e(s.cust)} · ${e(s.pay)}</p><div class="tw"><table><thead><tr><th>Item</th><th>Qty</th><th>Price</th><th>Subtotal</th></tr></thead><tbody>${s.items.map((i) => `<tr><td>${e(i.name || P(i.pid).name || "—")}</td><td class="m">${i.qty}</td><td class="m">${money(i.price)}</td><td class="m">${money(i.qty * i.price)}</td></tr>`).join("")}</tbody></table></div><h3 data-st="margin-top:14px">Total ${money(total(s))}</h3><p class="mu" data-st="margin:4px 0 0">Includes ${db.set.tax}% VAT: ${money((total(s) * db.set.tax) / (100 + db.set.tax))} · Cashier: ${e(s.by || "—")}</p><div class="ft"><button class="b p" data-x>Close</button></div>`;
   dlg.showModal();
 }
 
@@ -1093,7 +974,7 @@ function signUp() {
         l: "Role",
         t: "select",
         ph: "Select a role",
-        o: Object.entries(ROLE).filter((r) => !["admin", "manager"].includes(r[0])),
+        o: Object.entries(ROLE).filter((r) => r[0] != "admin"),
       },
       {
         n: "pw",
@@ -1152,6 +1033,7 @@ function rEmp() {
         (u) =>
           `<span class="tg ${u.status == "Active" ? "ok" : "bd"}">${u.status}</span>`,
       ],
+      ["Added / updated", dts],
       ["", (u) => empActs(u), "act"],
     ],
     db.emp.filter(
@@ -1162,17 +1044,115 @@ function rEmp() {
     "No employees match your filter.",
     (u) => (u.status == "Inactive" ? "arch" : ""),
   );
-  $("#roles").innerHTML = `<h3>Role responsibilities</h3><div class="tw"><table><thead><tr><th>Role</th><th>Responsible for</th><th>Not allowed</th></tr></thead><tbody>${Object.keys(ROLE)
-    .map(
-      (r) =>
-        `<tr><td><b>${ROLE[r]}</b></td><td>${e(DUTY[r][0])}</td><td>${e(DUTY[r][1])}</td></tr>`,
-    )
-    .join("")}</tbody></table></div>`;
 }
 function rLogs() {
   const q = $("#lq").value.toLowerCase();
   $("#ltbl").innerHTML = tlHtml(
     db.logs.filter((l) => (l.u + l.a).toLowerCase().includes(q)).reverse(),
+  );
+  rHist(q);
+}
+/* Record change history: previous values of edited, archived and restored records */
+const HT = {
+  products: ["Product", "product_name"],
+  categories: ["Category", "category_name"],
+  suppliers: ["Supplier", "company_name"],
+  customers: ["Customer", "customer_name"],
+  users: ["Employee", "full_name"],
+  settings: ["Store settings", "store_name"],
+};
+const HF = {
+  sku: "SKU",
+  product_name: "Name",
+  category_id: "Category",
+  supplier_id: "Supplier",
+  unit_price: "Unit price",
+  reorder_level: "Reorder level",
+  unit: "Unit",
+  category_name: "Name",
+  description: "Description",
+  company_name: "Company",
+  contact_person: "Contact person",
+  phone: "Phone",
+  email: "Email",
+  address: "Address",
+  customer_name: "Name",
+  street: "Street",
+  barangay: "Barangay",
+  city: "City",
+  province: "Province",
+  full_name: "Name",
+  username: "Username",
+  role_id: "Role",
+  job_title: "Position",
+  status: "Status",
+  store_name: "Store name",
+  tax_rate: "Tax rate (%)",
+  receipt_footer: "Receipt footer",
+};
+const hv = (k, v) =>
+  v === null || v === "" || v === undefined
+    ? "—"
+    : k == "category_id"
+      ? nm("cats", +v)
+      : k == "supplier_id"
+        ? nm("sup", +v)
+        : k == "role_id"
+          ? ROLE[["", "admin", "manager", "inventory", "cashier"][+v]] || v
+          : String(v);
+const hdiff = (h) =>
+  Object.keys(h.new)
+    .filter(
+      (k) =>
+        h.old[k] !== h.new[k] && !(k == "archived_at" && h.type != "UPDATE"),
+    )
+    .map((k) => [HF[k] || k, hv(k, h.old[k]), hv(k, h.new[k])]);
+function rHist(q) {
+  const rows = (db.hist || [])
+    .map((h) => {
+      const t = HT[h.tbl] || [h.tbl, ""],
+        name = h.new[t[1]] || h.old[t[1]] || "#" + h.id;
+      return { h, t: t[0], name, d: hdiff(h) };
+    })
+    .filter((r) =>
+      (
+        r.t +
+        " " +
+        r.name +
+        " " +
+        r.h.u +
+        " " +
+        r.d.map((x) => x.join(" ")).join(" ")
+      )
+        .toLowerCase()
+        .includes(q),
+    );
+  tbl(
+    "#htbl",
+    [
+      ["When", (r) => r.h.t, "m"],
+      ["Record", (r) => `<b>${e(r.name)}</b><div class="mu2">${e(r.t)}</div>`],
+      [
+        "Change",
+        (r) =>
+          `<span class="tg">${r.h.type == "ARCHIVE" ? "Archived" : r.h.type == "RESTORE" ? "Restored" : "Edited"}</span>`,
+      ],
+      [
+        "Previous → new values",
+        (r) =>
+          r.d.length
+            ? r.d
+                .map(
+                  (x) =>
+                    `<div class="mu2"><b>${e(x[0])}:</b> ${e(x[1])} → ${e(x[2])}</div>`,
+                )
+                .join("")
+            : "—",
+      ],
+      ["By", (r) => e(r.h.u)],
+    ],
+    rows,
+    "No changes recorded yet.",
   );
 }
 /* SETTINGS = the signed-in employee's own details (name, position, email, phone, password) */
@@ -1194,6 +1174,8 @@ function rProfile() {
       ["Email", me.email || "—"],
       ["Mobile number", me.phone || "—"],
       ["Role", ROLE[me.role]],
+      ["Account created", me.cr || "—"],
+      ["Last updated", me.up || "—"],
     ]
       .map((r) => `<tr><td><b>${r[0]}</b></td><td>${e(r[1])}</td></tr>`)
       .join("")}</tbody></table>`;
@@ -1271,6 +1253,12 @@ function setForm() {
       toast("Settings saved");
     },
   );
+  const h = dlg.querySelector("h3");
+  if (h)
+    h.insertAdjacentHTML(
+      "afterend",
+      `<p class="mu">Created ${e(db.set.cr || "—")} · Last updated ${e(db.set.up || "—")}</p>`,
+    );
 }
 // STOCK COUNT CORRECTION
 function adjust(id) {
@@ -1333,42 +1321,6 @@ document.addEventListener("click", (ev) => {
     $$(".pop").forEach((p) => p.classList.add("hide"));
 });
 ["#eq", "#lq"].forEach((s) => ($(s).oninput = () => show(cur)));
-/* ---- login form: real-time validation (same behaviour as openForm) ---- */
-const LOGIN_MSG = {
-  lu: "Enter your username or email",
-  lp: "Enter your password",
-};
-const loginTouched = new Set();
-function paintLogin(input, msg) {
-  const lb = input.closest("label");
-  lb.classList.toggle("e", !!msg);
-  lb.querySelector(".er").textContent = msg;
-  if (msg) input.setAttribute("aria-invalid", "true");
-  else input.removeAttribute("aria-invalid");
-  return !!msg;
-}
-/* returns true when INVALID */
-function checkLogin(input) {
-  const empty = input.id == "lp" ? input.value === "" : input.value.trim() === "";
-  return paintLogin(input, empty ? LOGIN_MSG[input.id] : "");
-}
-let loginPointer = false; /* a click on a button must not be displaced by a blur-triggered error */
-$("#lf").addEventListener("pointerdown", (ev) => {
-  loginPointer = !!ev.target.closest("button:not(.pwt)");
-});
-$("#lf").addEventListener("input", (ev) => {
-  if (!LOGIN_MSG[ev.target.id]) return;
-  loginTouched.add(ev.target.id);
-  delete ev.target.closest("label").dataset.srv;
-  checkLogin(ev.target); /* also replaces any "incorrect password" message once the user edits */
-});
-$("#lf").addEventListener("focusout", (ev) => {
-  if (!LOGIN_MSG[ev.target.id] || loginPointer) return;
-  loginTouched.add(ev.target.id);
-  /* keep the server's "incorrect password" message while the box is empty after a failed attempt */
-  if (ev.target.closest("label").dataset.srv) return;
-  checkLogin(ev.target);
-});
 /* LOGIN PASSWORD CHECKED AGAINST THE HASH*/
 function buildLogin() {
   $("#lu").value = "";
@@ -1513,7 +1465,6 @@ document.addEventListener("click", (ev) => {
     signup: signUp,
     po: () => toast("Purchase orders are not enabled for this store yet"),
     sale: () => saleInfo(d.id),
-    supd: () => supInfo(+d.id),
     exp: () => toast("Preparing " + d.t + " export"),
     adj: () => (can("stock") ? adjust(+d.id) : deny()),
     set: () => (ADM() ? setForm() : deny()),
@@ -1529,7 +1480,7 @@ document.addEventListener("click", (ev) => {
     mypw: changeMyPw,
   })[d.a]();
 });
-["#pq", "#sq", "#cq"].forEach((s) => ($(s).oninput = () => show(cur)));
+["#pq", "#sq"].forEach((s) => ($(s).oninput = () => show(cur)));
 ["#pc", "#mf", "#pa", "#ca", "#sa", "#ea"].forEach(
   (s) => ($(s).onchange = () => show(cur)),
 );

@@ -27,7 +27,7 @@
       crossorigin="anonymous"
     />
 
-    <link rel="stylesheet" href="style.css?v=202610201300" />
+    <link rel="stylesheet" href="style.css?v=202610191150" />
   </head>
   <body>
     <aside>
@@ -120,6 +120,7 @@
           </button>
         </div>
         <div class="card tw" id="stbl"></div>
+        <div class="card gap-top hide" id="supdet"></div>
       </section>
 
       <section class="v" id="movements">
@@ -157,18 +158,22 @@
         <div class="card tw" id="cutbl"></div>
       </section>
 
-      <section class="v" id="reports">
+      <section class="v" id="customers">
         <div class="bar">
-          <button class="b" data-a="exp" data-t="inventory CSV">
-            Export inventory CSV</button
-          ><button class="b" data-a="exp" data-t="inventory PDF">
-            Export inventory PDF</button
-          ><button class="b" data-a="exp" data-t="sales CSV">
-            Export sales CSV</button
-          ><button class="b" data-a="exp" data-t="sales PDF">
-            Export sales PDF
-          </button>
+          <input
+            id="cq"
+            type="search"
+            placeholder="Search by name, barangay or city"
+          /><select id="cua" class="af" aria-label="Archive filter">
+            <option value="">Active</option>
+            <option value="arch">Archived</option>
+            <option value="all">Active + archived</option></select
+          ><button class="b p" data-a="edit" data-s="cust">Add customer</button>
         </div>
+        <div class="card tw" id="cutbl"></div>
+      </section>
+
+      <section class="v" id="reports">
         <div class="card">
           <h3>Inventory report</h3>
           <div class="tw" id="rinv"></div>
@@ -203,9 +208,14 @@
       </section>
       <section class="v" id="logs">
         <div class="bar">
-          <input id="lq" type="search" placeholder="Search by user or action" />
+          <input id="lq" type="search" placeholder="Search by user, action or record" />
         </div>
         <div class="card tw" id="ltbl"></div>
+        <div class="card gap-top">
+          <h3>Record change history</h3>
+          <p class="mu">Every edit, archive and restore keeps the previous values here so they can be looked up later.</p>
+          <div class="tw" id="htbl"></div>
+        </div>
       </section>
       <section class="v" id="profile">
         <div class="card">
@@ -304,6 +314,6 @@
       src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
       crossorigin="anonymous"
     ></script>
-    <script src="app.js?v=202610201300"></script>
+    <script src="app.js?v=202610191150"></script>
   </body>
 </html>
