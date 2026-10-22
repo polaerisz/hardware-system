@@ -7,17 +7,17 @@ const paint = (n) => {
     }
   });
 };
-const mo = new MutationObserver((ms) =>
+const styleObserver = new MutationObserver((ms) =>
   ms.forEach((m) => m.addedNodes.forEach(paint)),
 );
-mo.observe(document.documentElement, { childList: true, subtree: true });
+styleObserver.observe(document.documentElement, { childList: true, subtree: true });
 const flushStyles = () =>
-  mo.takeRecords().forEach((m) => m.addedNodes.forEach(paint));
+  styleObserver.takeRecords().forEach((m) => m.addedNodes.forEach(paint));
 
-/* ============ HELPERS ============ */
+/* ============ HELPER FUNCTIONS ============ */
 const $ = (s) => document.querySelector(s),
   $$ = (s) => [...document.querySelectorAll(s)];
-const e = (s) =>
+const esc = (s) =>
   String(s).replace(
     /[&<>"]/g,
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
@@ -30,7 +30,7 @@ const money = (n) =>
   });
 const now = () => new Date().toISOString().slice(0, 16).replace("T", " ");
 
-// ============ PASSWORD VISIBILITY TOGGLE ============
+// ============ SHOW / HIDE PASSWORD BUTTON ============
 const PWBTN =
   '<button type="button" class="pwt" aria-label="Show password" aria-pressed="false"><span class="ms">visibility</span></button>';
 function setPwVisible(input, show) {
@@ -43,7 +43,7 @@ function setPwVisible(input, show) {
 }
 document.addEventListener("mousedown", (ev) => {
   if (ev.target.closest(".pwt"))
-    ev.preventDefault(); /* keep focus and caret in the field */
+    ev.preventDefault(); /* so the cursor stays inside the input box */
 });
 document.addEventListener("click", (ev) => {
   const b = ev.target.closest(".pwt");
@@ -52,7 +52,7 @@ document.addEventListener("click", (ev) => {
   setPwVisible(input, input.type === "password");
 });
 
-/* ============ DATA  ============ */
+/* ============ DATA ============ */
 const db = {
   cust: [],
   cats: [],
@@ -64,8 +64,8 @@ const db = {
   logs: [],
   set: { store: "Stock Keeper", tax: 12, reorder: 20, footer: "" },
 };
-const P = (id) => db.prod.find((p) => p.id === id) || {};
-/* active products that would be left with no active supplier if supplier sid withdrew */
+const productById = (id) => db.prod.find((p) => p.id === id) || {};
+/* active products that would have no supplier left if supplier sid is archived */
 const stuckProducts = (sid) =>
   db.prod.filter(
     (p) =>
@@ -75,7 +75,7 @@ const stuckProducts = (sid) =>
         (x) => x !== sid && !(db.sup.find((s) => s.id === x) || {}).arch,
       ),
   );
-/* active products that would be left with no active category if category cid were archived */
+/* active products that would have no category left if category cid is archived */
 const stuckByCat = (cid) =>
   db.prod.filter(
     (p) =>
@@ -85,14 +85,14 @@ const stuckByCat = (cid) =>
         (x) => x !== cid && !(db.cats.find((c) => c.id === x) || {}).arch,
       ),
   );
-/* names of every category of a product, main category first */
-const catNames = (p) => (p.cats || []).map((id) => nm("cats", id));
-/* role keys -> readable labels, e.g. ["manager","inventory"] -> "Manager, Inventory staff" */
-const rl = (keys) => (keys || []).map((k) => ROLE[k] || k).join(", ");
+/* all the category names of a product (main category first) */
+const catNames = (p) => (p.cats || []).map((id) => nameOf("cats", id));
+/* turns the role keys into nice names, like ["manager","inventory"] becomes "Manager, Inventory staff" */
+const roleLabels = (keys) => (keys || []).map((k) => ROLE[k] || k).join(", ");
 const total = (s) => s.items.reduce((a, i) => a + i.qty * i.price, 0);
-const nm = (l, id) => (db[l].find((x) => x.id === id) || { name: "—" }).name;
+const nameOf = (l, id) => (db[l].find((x) => x.id === id) || { name: "—" }).name;
 
-/* Calls api.php. Returns the JSON on success, or null (and shows a toast) on failure. */
+/* Talks to api.php. Gives back the data if it works, or null (and shows an error message) if it fails. */
 async function api(action, data, quiet) {
   try {
     const r = await fetch("api.php?action=" + action, {
@@ -137,7 +137,7 @@ async function api(action, data, quiet) {
     return null;
   }
 }
-/* Reloads every table from the database and refreshes the session. */
+/* Loads all the data from the database again and updates the logged-in user. */
 async function load(quiet) {
   const j = await api("bootstrap", null, quiet);
   if (!j) return false;
@@ -146,7 +146,7 @@ async function load(quiet) {
   return true;
 }
 
-/* ============ UI PRIMITIVES ============ */
+/* ============ BASIC UI PARTS (buttons, tables, etc.) ============ */
 function toast(msg, type) {
   if (
     type != "bad" &&
@@ -159,30 +159,42 @@ function toast(msg, type) {
   $("#toasts").append(t);
   setTimeout(() => t.remove(), 3200);
 }
-/* rc (optional) returns an extra class name for a row, e.g. "arch" for archived records. */
+/* rc is optional. It gives a row an extra class, like "arch" for archived records. */
 function tbl(el, cols, rows, empty, rc) {
-  $(el).innerHTML = rows.length
-    ? `<table><thead><tr>${cols.map((c) => `<th>${c[0]}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr${rc && rc(r) ? ` class="${rc(r)}"` : ""}>${cols.map((c) => `<td class="${c[2] || ""}">${c[1](r)}</td>`).join("")}</tr>`).join("")}</tbody></table>`
-    : `<div class="em"><span class="ms">inbox</span><b>${empty || "Nothing here yet"}</b><p>Records you add will appear here.</p></div>`;
+  if (!rows.length) {
+    $(el).innerHTML = `<div class="em"><span class="ms">inbox</span><b>${empty || "Nothing here yet"}</b><p>Records you add will appear here.</p></div>`;
+    return;
+  }
+  const header = cols.map((c) => `<th>${c[0]}</th>`).join("");
+  const body = rows
+    .map((r) => {
+      const extraClass = rc && rc(r);
+      const cells = cols
+        .map((c) => `<td class="${c[2] || ""}">${c[1](r)}</td>`)
+        .join("");
+      return `<tr${extraClass ? ` class="${extraClass}"` : ""}>${cells}</tr>`;
+    })
+    .join("");
+  $(el).innerHTML = `<table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>`;
 }
-/* Archive helpers: records are never deleted, only flagged arch = true. */
+/* Archive helpers: we never delete records, we just mark them arch = true. */
 const actv = (l) => db[l].filter((x) => !x.arch);
 const arf = (sel) => {
   const v = $(sel).value;
   return (x) => v == "all" || (v == "arch" ? !!x.arch : !x.arch);
 };
 const archRow = (x) => (x.arch ? "arch" : "");
-/* Added / updated (and archived) dates shown on every record list */
+/* shows the added / updated (and archived) dates in every list */
 const dts = (x) =>
-  `<div class="mu2">Added ${e(x.cr || "—")}</div><div class="mu2">Updated ${e(x.up || "—")}</div>` +
-  (x.ar ? `<div class="mu2">Archived ${e(x.ar)}</div>` : "");
+  `<div class="mu2">Added ${esc(x.cr || "—")}</div><div class="mu2">Updated ${esc(x.up || "—")}</div>` +
+  (x.ar ? `<div class="mu2">Archived ${esc(x.ar)}</div>` : "");
 const archTag = (x) => (x.arch ? ' <span class="tg">Archived</span>' : "");
 const archEmpty = (sel, what) =>
   $(sel).value == "arch" ? `No archived ${what}.` : null;
 const acts = (s, id) => {
   if (!can("manage")) return "";
   const it = db[S[s].k].find((x) => x.id === id);
-  // Edit: administrators and managers. Archive / Restore: administrators only.
+  // Edit is for admins and managers. Archive / Restore is for admins only.
   return it && it.arch
     ? can("archive")
       ? `<button class="b s" data-a="restore" data-s="${s}" data-id="${id}">Restore</button>`
@@ -192,7 +204,7 @@ const acts = (s, id) => {
           ? ` <button class="b s" data-a="arch" data-s="${s}" data-id="${id}">Archive</button>`
           : "");
 };
-/* Employee actions: Edit plus an Active/Inactive toggle (employees are never deleted or archived). */
+/* Employee buttons: Edit and an Active/Inactive switch (employees are never deleted or archived). */
 const empActs = (u) =>
   !can("users")
     ? ""
@@ -214,14 +226,50 @@ function ask(msg, fn, label) {
   };
 }
 
-/* Generic modal form builder with validation. */
+/* Makes the pop-up forms we use everywhere, and checks if the inputs are correct. */
 const EMAIL_RE =
   /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
 const PH_RE = /^09\d{9}$/; /* 09XXXXXXXXX, exactly 11 digits */
-const LAND_RE = /^(09\d{9}|0[2-8]\d{7,9})$/; /* mobile or landline (suppliers) */
+const LAND_RE = /^(09\d{9}|0[2-8]\d{7,9})$/; /* mobile or landline (for suppliers) */
 function openForm(title, fs, vals, save) {
-  const ph = (f) => (f.ph ? ` placeholder="${e(f.ph)}"` : "");
-  dlg.innerHTML = `<form novalidate><h3>${title}</h3>${fs.map((f) => `<label>${f.l}${f.t == "multi" ? `<select name="${f.n}" multiple size="${Math.min(5, f.o.length || 1)}">${f.o.map((o) => `<option value="${o[0]}">${e(o[1])}</option>`).join("")}</select>` : f.t == "select" ? `<select name="${f.n}">${f.ph ? `<option value="" disabled selected hidden>${e(f.ph)}</option>` : ""}${f.o.map((o) => `<option value="${o[0]}">${e(o[1])}</option>`).join("")}</select>` : f.t == "password" ? `<span class="pw"><input name="${f.n}" type="password"${ph(f)}>${PWBTN}</span>` : `<input name="${f.n}" type="${f.t || "text"}"${f.ro ? " readonly" : ""}${f.t == "number" ? ` min="${f.min ?? 0}" step="${f.step || 1}"` : ""}>`}${f.h ? `<small class="hint">${f.h}</small>` : ""}<small class="er"></small></label>`).join("")}<div class="ft"><button type="button" class="b" data-x>Cancel</button><button class="b p">Save</button></div></form>`;
+  const placeholderAttr = (f) =>
+    f.ph ? ` placeholder="${esc(f.ph)}"` : "";
+  const optionTags = (f) =>
+    f.o.map((o) => `<option value="${o[0]}">${esc(o[1])}</option>`).join("");
+
+  /* makes the right input box or dropdown for each kind of field */
+  const renderControl = (f) => {
+    if (f.t == "multi") {
+      const size = Math.min(5, f.o.length || 1);
+      return `<select name="${f.n}" multiple size="${size}">${optionTags(f)}</select>`;
+    }
+    if (f.t == "select") {
+      const placeholder = f.ph
+        ? `<option value="" disabled selected hidden>${esc(f.ph)}</option>`
+        : "";
+      return `<select name="${f.n}">${placeholder}${optionTags(f)}</select>`;
+    }
+    if (f.t == "password") {
+      return `<span class="pw"><input name="${f.n}" type="password"${placeholderAttr(f)}>${PWBTN}</span>`;
+    }
+    const readonly = f.ro ? " readonly" : "";
+    const numberAttrs =
+      f.t == "number" ? ` min="${f.min ?? 0}" step="${f.step || 1}"` : "";
+    return `<input name="${f.n}" type="${f.t || "text"}"${readonly}${numberAttrs}>`;
+  };
+
+  const renderField = (f) => {
+    const hint = f.h ? `<small class="hint">${f.h}</small>` : "";
+    return `<label>${f.l}${renderControl(f)}${hint}<small class="er"></small></label>`;
+  };
+
+  /* No spaces between the tags on purpose so the design doesn't get extra gaps. */
+  const buttons =
+    `<button type="button" class="b" data-x>Cancel</button>` +
+    `<button class="b p">Save</button>`;
+  dlg.innerHTML =
+    `<form novalidate><h3>${title}</h3>${fs.map(renderField).join("")}` +
+    `<div class="ft">${buttons}</div></form>`;
   const fm = dlg.querySelector("form");
   fs.forEach((f) => {
     let v = vals[f.n];
@@ -250,11 +298,11 @@ function openForm(title, fs, vals, save) {
     return d;
   };
   const lab = (f) => fm.elements[f.n].closest("label");
-  /* A field becomes "touched" the first time the user types in it or leaves it.
-     Touched fields are re-validated on every keystroke / change and stay red
-     until they satisfy their rules. Untouched fields are only flagged on submit. */
+  /* A field is "touched" once the user types in it or clicks out of it.
+     Touched fields get checked again every time the user types or changes something, and they stay red
+     until they are correct. Fields that are not touched yet are only checked when the form is submitted. */
   const touched = new Set();
-  /* returns true when the field is INVALID, and paints/clears the red state */
+  /* gives true if the field is WRONG, and also shows or removes the red color */
   const check = (f, d) => {
     const el = fm.elements[f.n],
       x = d[f.n],
@@ -281,13 +329,13 @@ function openForm(title, fs, vals, save) {
     return !!m;
   };
   const fieldOf = (ev) => fs.find((x) => x.n == ev.target.name);
-  /* re-check every touched field, so dependent rules update too
-     (e.g. picking another product re-checks the quantity; editing the password re-checks its confirmation) */
+  /* check all the touched fields again, in case one depends on another
+     (like choosing another product re-checks the quantity, or changing the password re-checks the confirm password) */
   const revalidate = () => {
     const d = read();
     fs.forEach((f) => touched.has(f.n) && check(f, d));
   };
-  let cancelling = false; /* don't let a blur-triggered error shift the Cancel button out from under the click */
+  let cancelling = false; /* so an error message doesn't push the Cancel button away right when we click it */
   fm.addEventListener("pointerdown", (ev) => {
     cancelling = !!ev.target.closest("[data-x]");
   });
@@ -318,7 +366,7 @@ function openForm(title, fs, vals, save) {
       if (!el.readOnly) el.focus();
       return toast("Fix the highlighted fields", "bad");
     }
-    /* keep the form open if saving fails, so nothing typed is lost */
+    /* keep the form open if saving fails so what the user typed is not lost */
     const btn = fm.querySelector("button.p");
     btn.disabled = true;
     let ok;
@@ -332,9 +380,9 @@ function openForm(title, fs, vals, save) {
   dlg.showModal();
 }
 
-/* ============ CRUD: products, categories, suppliers ============ */
-/* Preview of the SKU the server will assign (same rule as next_sku() in api.php,
-   which stays the authority). Returns "" when no category is chosen yet. */
+/* ============ ADD / EDIT / ARCHIVE: products, categories, suppliers ============ */
+/* Shows a preview of the SKU the server will give (same rule as next_sku() in api.php,
+   the server still decides the real one). Gives "" if no category is picked yet. */
 function nextSku(catId) {
   const c = db.cats.find((x) => x.id === catId);
   if (!c) return "";
@@ -504,8 +552,8 @@ function edit(s, id) {
     s == "prod" && id
       ? {
           ...it,
-          sups: (it.sups || []).filter((x) => x !== it.sup), // "other" suppliers = all except the main one
-          cats: (it.cats || []).filter((x) => x !== it.cat), // "other" categories = all except the main one
+          sups: (it.sups || []).filter((x) => x !== it.sup), // the "other" suppliers are all the suppliers except the main one
+          cats: (it.cats || []).filter((x) => x !== it.cat), // the "other" categories are all the categories except the main one
         }
       : s == "cust" && !id
         ? { code: "Assigned when you save" }
@@ -526,7 +574,7 @@ function edit(s, id) {
     dlg.querySelector('[name="cat"]').onchange = (ev) =>
       (dlg.querySelector('[name="sku"]').value = nextSku(+ev.target.value));
 }
-/* Archive instead of delete: the record stays in the database and can be restored. */
+/* We archive instead of delete. The record stays in the database and can be brought back. */
 function archive(s, id) {
   if (!can("archive")) return deny();
   const c = S[s],
@@ -553,7 +601,7 @@ function archive(s, id) {
         ? "It will no longer be offered when making a sale. Past sales keep the customer name."
         : "It will be hidden from lists and forms.";
   ask(
-    `Archive <b>${e(it.name)}</b>? ${note} Nothing is deleted. You can restore it any time by switching the filter to Archived.`,
+    `Archive <b>${esc(it.name)}</b>? ${note} Nothing is deleted. You can restore it any time by switching the filter to Archived.`,
     async () => {
       if (!(await api("archive_" + API[s], { id }))) return;
       await load();
@@ -563,7 +611,7 @@ function archive(s, id) {
     "Archive",
   );
 }
-/* Switch an employee between Active and Inactive. Inactive accounts cannot sign in; records are kept. */
+/* Switches an employee between Active and Inactive. Inactive accounts can't log in, but their records stay. */
 function setEmpStatus(id, status) {
   if (!can("users")) return deny();
   const it = db.emp.find((x) => x.id === id);
@@ -590,7 +638,7 @@ function setEmpStatus(id, status) {
   };
   if (status == "Active") return go();
   ask(
-    `Deactivate <b>${e(it.name)}</b>? They will no longer be able to sign in. Their records and history are kept, and you can activate the account again at any time.`,
+    `Deactivate <b>${esc(it.name)}</b>? They will no longer be able to sign in. Their records and history are kept, and you can activate the account again at any time.`,
     go,
     "Deactivate",
   );
@@ -647,14 +695,14 @@ function mk(id, type, labels, data, label) {
   });
 }
 
-/* ============ VIEW RENDERERS ============ */
+/* ============ FUNCTIONS THAT SHOW EACH PAGE ============ */
 const saleCols = [
   ["Receipt", (s) => `<b>${s.id}</b>`, "m"],
   ["Date", (s) => s.date, "m"],
-  ["Customer", (s) => e(s.cust) + (s.cid ? `<div class="mu2">${e(s.cid)}</div>` : "")],
+  ["Customer", (s) => esc(s.cust) + (s.cid ? `<div class="mu2">${esc(s.cid)}</div>` : "")],
   ["Lines", (s) => s.items.length],
-  ["Cashier", (s) => e(s.by || "—")],
-  ["Payment", (s) => e(s.pay)],
+  ["Cashier", (s) => esc(s.by || "—")],
+  ["Payment", (s) => esc(s.pay)],
   ["Total", (s) => money(total(s)), "m"],
   [
     "",
@@ -672,7 +720,7 @@ function rProd() {
     db.cats
       .map(
         (c) =>
-          `<option value="${c.id}">${e(c.name)}${c.arch ? " (archived)" : ""}</option>`,
+          `<option value="${c.id}">${esc(c.name)}${c.arch ? " (archived)" : ""}</option>`,
       )
       .join("");
   sel.value = cur0;
@@ -687,24 +735,24 @@ function rProd() {
   tbl(
     "#ptbl",
     [
-      ["SKU", (p) => e(p.sku), "m"],
+      ["SKU", (p) => esc(p.sku), "m"],
       [
         "Product",
         (p) =>
-          `<div class="pn"><span class="ch" data-st="--c:${cc(p.cat)}"><span class="ms">${ci(p.cat)}</span></span><b>${e(p.name)}</b></div>`,
+          `<div class="pn"><span class="ch" data-st="--c:${cc(p.cat)}"><span class="ms">${ci(p.cat)}</span></span><b>${esc(p.name)}</b></div>`,
       ],
       [
         "Category",
         (p) =>
-          `<span class="cd" data-st="--c:${cc(p.cat)}"></span>${e(nm("cats", p.cat))}` +
+          `<span class="cd" data-st="--c:${cc(p.cat)}"></span>${esc(nameOf("cats", p.cat))}` +
           ((p.cats || []).length > 1
-            ? `<div class="mu2">Also: ${e(catNames(p).slice(1).join(", "))}</div>`
+            ? `<div class="mu2">Also: ${esc(catNames(p).slice(1).join(", "))}</div>`
             : ""),
       ],
       [
         "Supplier",
         (p) =>
-          e(nm("sup", p.sup)) +
+          esc(nameOf("sup", p.sup)) +
           ((p.sups || []).length > 1
             ? `<div class="mu2">+${p.sups.length - 1} more</div>`
             : ""),
@@ -724,8 +772,8 @@ function rCat() {
   tbl(
     "#ctbl",
     [
-      ["Category", (c) => `<b>${e(c.name)}</b>${archTag(c)}`],
-      ["Description", (c) => e(c.desc || "")],
+      ["Category", (c) => `<b>${esc(c.name)}</b>${archTag(c)}`],
+      ["Description", (c) => esc(c.desc || "")],
       [
         "Products",
         (c) => actv("prod").filter((p) => (p.cats || []).includes(c.id)).length,
@@ -747,19 +795,19 @@ function rSup() {
       [
         "Company",
         (s) =>
-          `<div class="pn"><span class="ch" data-st="--c:${cc(s.id)}"><span class="ms">local_shipping</span></span><b>${e(s.name)}</b>${archTag(s)}</div>`,
+          `<div class="pn"><span class="ch" data-st="--c:${cc(s.id)}"><span class="ms">local_shipping</span></span><b>${esc(s.name)}</b>${archTag(s)}</div>`,
       ],
-      ["Contact", (s) => e(s.contact)],
-      ["Barangay", (s) => e(s.brgy || "—")],
+      ["Contact", (s) => esc(s.contact)],
+      ["Barangay", (s) => esc(s.brgy || "—")],
       [
         "City",
         (s) =>
           s.city || s.prov
-            ? e(s.city || "—") + (s.prov ? `<div class="mu2">${e(s.prov)}</div>` : "")
-            : e(s.addr || "—"),
+            ? esc(s.city || "—") + (s.prov ? `<div class="mu2">${esc(s.prov)}</div>` : "")
+            : esc(s.addr || "—"),
       ],
-      ["Phone", (s) => e(s.phone), "m"],
-      ["Email", (s) => e(s.email)],
+      ["Phone", (s) => esc(s.phone), "m"],
+      ["Email", (s) => esc(s.email)],
       [
         "Products",
         (s) => {
@@ -781,13 +829,13 @@ function rCust() {
   tbl(
     "#cutbl",
     [
-      ["Customer ID", (c) => e(c.code || "—"), "m"],
-      ["Customer", (c) => `<b>${e(c.name)}</b>${archTag(c)}`],
-      ["Mobile", (c) => e(c.phone), "m"],
+      ["Customer ID", (c) => esc(c.code || "—"), "m"],
+      ["Customer", (c) => `<b>${esc(c.name)}</b>${archTag(c)}`],
+      ["Mobile", (c) => esc(c.phone), "m"],
       [
         "Address",
         (c) =>
-          e([c.street, c.brgy, c.city, c.prov].filter(Boolean).join(", ")),
+          esc([c.street, c.brgy, c.city, c.prov].filter(Boolean).join(", ")),
       ],
       ["Added / updated", dts],
       ["", (c) => custActs(c), "act"],
@@ -801,7 +849,7 @@ function rCust() {
     archRow,
   );
 }
-/* Customers: admin, manager and cashier can edit; only admin can archive/restore */
+/* Customers: admin, manager and cashier can edit, only the admin can archive/restore */
 function custActs(c) {
   if (!can("customers")) return "";
   if (c.arch)
@@ -821,15 +869,15 @@ function rMov() {
     "#mtbl",
     [
       ["Date", (m) => m.date, "m"],
-      ["Product", (m) => e(P(m.pid).name || "—")],
+      ["Product", (m) => esc(productById(m.pid).name || "—")],
       [
         "Type",
         (m) =>
           `<span class="tg ${m.type == "IN" ? "ok" : "bd"}">${m.type == "IN" ? "Stock in" : "Stock out"}</span>`,
       ],
       ["Qty", (m) => (m.type == "IN" ? "+" : "−") + m.qty, "m"],
-      ["Reference / reason", (m) => e(m.note)],
-      ["Handled by", (m) => (m.by ? av(m.by, "sm") + " " + e(m.by) : "—")],
+      ["Reference / reason", (m) => esc(m.note)],
+      ["Handled by", (m) => (m.by ? av(m.by, "sm") + " " + esc(m.by) : "—")],
     ],
     db.mov.filter((m) => !f || m.type == f).reverse(),
   );
@@ -850,9 +898,9 @@ function rRep() {
   tbl(
     "#rinv",
     [
-      ["SKU", (p) => e(p.sku), "m"],
-      ["Product", (p) => e(p.name)],
-      ["Category", (p) => e(catNames(p).join(", ") || "—")],
+      ["SKU", (p) => esc(p.sku), "m"],
+      ["Product", (p) => esc(p.name)],
+      ["Category", (p) => esc(catNames(p).join(", ") || "—")],
       ["On hand", (p) => p.stock, "m"],
       ["Reorder at", (p) => p.min, "m"],
       ["Value", (p) => money(p.stock * p.price), "m"],
@@ -885,7 +933,7 @@ function rRep() {
   tbl(
     "#rpay",
     [
-      ["Method", (r) => e(r[0])],
+      ["Method", (r) => esc(r[0])],
       ["Transactions", (r) => r[1][0], "m"],
       ["Revenue", (r) => money(r[1][1]), "m"],
     ],
@@ -893,7 +941,7 @@ function rRep() {
   );
 }
 
-/* ============ INVENTORY MOVEMENTS ============ */
+/* ============ STOCK IN / STOCK OUT (inventory movements) ============ */
 function mvForm(type) {
   const out = type == "OUT";
   openForm(
@@ -917,7 +965,7 @@ function mvForm(type) {
         min: 1,
         ph: "e.g. 10",
         v: (x, d) =>
-          out && x > P(d.pid).stock ? `Only ${P(d.pid).stock} on hand` : "",
+          out && x > productById(d.pid).stock ? `Only ${productById(d.pid).stock} on hand` : "",
       },
       {
         n: "note",
@@ -943,7 +991,7 @@ function mvForm(type) {
         return false;
       await load();
       show(cur);
-      toast(`${out ? "Stock out" : "Stock in"}: ${d.qty} × ${P(d.pid).name}`);
+      toast(`${out ? "Stock out" : "Stock in"}: ${d.qty} × ${productById(d.pid).name}`);
     },
   );
 }
@@ -978,7 +1026,7 @@ function newSale() {
         min: 1,
         ph: "e.g. 5",
         v: (x, d) =>
-          x > P(d.pid).stock ? `Only ${P(d.pid).stock} in stock` : "",
+          x > productById(d.pid).stock ? `Only ${productById(d.pid).stock} in stock` : "",
       },
       {
         n: "pay",
@@ -1007,11 +1055,31 @@ function newSale() {
 }
 function saleInfo(id) {
   const s = db.sales.find((x) => x.id == id);
-  dlg.innerHTML = `<h3>Receipt ${s.id}</h3><p class="mu" data-st="margin:0 0 12px">${s.date} · ${e(s.cust)}${s.cid ? " (" + e(s.cid) + ")" : ""} · ${e(s.pay)}</p><div class="tw"><table><thead><tr><th>Item</th><th>Qty</th><th>Price</th><th>Subtotal</th></tr></thead><tbody>${s.items.map((i) => `<tr><td>${e(i.name || P(i.pid).name || "—")}</td><td class="m">${i.qty}</td><td class="m">${money(i.price)}</td><td class="m">${money(i.qty * i.price)}</td></tr>`).join("")}</tbody></table></div><h3 data-st="margin-top:14px">Total ${money(total(s))}</h3><p class="mu" data-st="margin:4px 0 0">Includes ${db.set.tax}% VAT: ${money((total(s) * db.set.tax) / (100 + db.set.tax))} · Cashier: ${e(s.by || "—")}</p><div class="ft"><button class="b p" data-x>Close</button></div>`;
+  const vat = (total(s) * db.set.tax) / (100 + db.set.tax);
+  const customerId = s.cid ? " (" + esc(s.cid) + ")" : "";
+
+  const itemRows = s.items
+    .map(
+      (i) =>
+        `<tr><td>${esc(i.name || productById(i.pid).name || "—")}</td>` +
+        `<td class="m">${i.qty}</td>` +
+        `<td class="m">${money(i.price)}</td>` +
+        `<td class="m">${money(i.qty * i.price)}</td></tr>`,
+    )
+    .join("");
+
+  dlg.innerHTML =
+    `<h3>Receipt ${s.id}</h3>` +
+    `<p class="mu" data-st="margin:0 0 12px">${s.date} · ${esc(s.cust)}${customerId} · ${esc(s.pay)}</p>` +
+    `<div class="tw"><table><thead><tr><th>Item</th><th>Qty</th><th>Price</th><th>Subtotal</th></tr></thead>` +
+    `<tbody>${itemRows}</tbody></table></div>` +
+    `<h3 data-st="margin-top:14px">Total ${money(total(s))}</h3>` +
+    `<p class="mu" data-st="margin:4px 0 0">Includes ${db.set.tax}% VAT: ${money(vat)} · Cashier: ${esc(s.by || "—")}</p>` +
+    `<div class="ft"><button class="b p" data-x>Close</button></div>`;
   dlg.showModal();
 }
 
-/* ============ NAVIGATION, THEME, EVENTS ============ */
+/* ============ MENU, DARK/LIGHT MODE, BUTTON CLICKS ============ */
 const V = [
   ["dashboard", "Dashboard", "dashboard", () => rHome()],
   ["products", "Products", "inventory_2", rProd],
@@ -1022,7 +1090,7 @@ const V = [
   ["reports", "Reports", "summarize", rRep],
 ];
 let cur = "dashboard";
-// ============ ROLES, AUTH, EMPLOYEES, LOGS, SETTINGS ============
+// ============ ROLES, LOGIN, EMPLOYEES, LOGS, SETTINGS ============
 V.push(
   ["customers", "Customers", "groups", rCust],
   ["employees", "Employees", "badge", rEmp],
@@ -1030,7 +1098,7 @@ V.push(
   ["settings", "Settings", "settings", rSet],
   ["profile", "Profile", "account_circle", rProfile],
 );
-// LOAD THE ROLES
+// THE ROLE NAMES
 const ROLE = {
   admin: "Administrator",
   manager: "Manager",
@@ -1060,7 +1128,7 @@ const CAN = {
   archive: ["admin"],
   customers: ["admin", "manager", "cashier"],
 };
-/* Clear responsibilities per role (shown on the Employees page) */
+/* What each role is responsible for (shown on the Employees page) */
 const DUTY = {
   admin: [
     "Full control of the system: employee accounts, roles, activate/deactivate, archive and restore records, activity logs.",
@@ -1079,11 +1147,11 @@ const DUTY = {
     "Cannot change products, stock or suppliers, and cannot see reports or employees.",
   ],
 };
-/* An employee can hold several roles; permissions are the union of all of them. */
+/* An employee can have many roles. They can do whatever any of their roles can do. */
 const can = (k) => !!me && (me.roles || []).some((r) => CAN[k].includes(r));
 let me = null;
 const ADM = () => me && (me.roles || []).includes("admin");
-// PERMISSION MAP, USED TO FILTER WHAT ROLES CAN DO CERTAIN THINGS
+// CHECKS WHICH PAGES THE USER IS ALLOWED TO OPEN
 const allowed = (v) =>
   v == "profile" ||
   v == "settings" ||
@@ -1107,8 +1175,8 @@ S.emp = {
     { n: "phone", l: "Phone", t: "tel", opt: 1, ph: "09XXXXXXXXX" },
   ],
 };
-function log() {} /* activity logs are written by api.php, not by the browser */
-// Sidebar is grouped and filtered by role
+function log() {} /* the activity logs are saved by api.php, not by the browser */
+// The side menu is grouped, and only shows what the role can use
 const GRP = {
     dashboard: 0,
     products: 1,
@@ -1156,7 +1224,7 @@ function setRole() {
     .slice(
       0,
       2,
-    )}</span><div><b>${e(me.name)}</b><small>${e(rl(me.roles))}</small></div>`;
+    )}</span><div><b>${esc(me.name)}</b><small>${esc(roleLabels(me.roles))}</small></div>`;
   document.body.className = [
     !can("manage") && "nm",
     !can("stock") && "ns",
@@ -1172,59 +1240,10 @@ $("#gs").onkeydown = (ev) => {
     show("products");
   }
 };
-/* SIGN UP - FRONT END ONLY [REMINDER TO ADD BACKEND AUTHORIZATION FOR THIS FEATURE] */
-function signUp() {
-  openForm(
-    "Create account",
-    [
-      { n: "name", l: "Full name", ph: "e.g. Maria Santos" },
-      { n: "title", l: "Position", ph: "e.g. Cashier" },
-      {
-        n: "role",
-        l: "Role",
-        t: "select",
-        ph: "Select a role",
-        o: Object.entries(ROLE).filter((r) => r[0] != "admin"),
-      },
-      {
-        n: "pw",
-        l: "Password",
-        t: "password",
-        ph: "At least 6 characters",
-        v: (x) => (x.length < 6 ? "Use at least 6 characters" : ""),
-      },
-      {
-        n: "pw2",
-        l: "Confirm password",
-        t: "password",
-        ph: "Re-enter your password",
-        v: (x, d) => (x !== d.pw ? "Passwords do not match" : ""),
-      },
-    ],
-    {},
-    async (d) => {
-      const j = await api("register", {
-        name: d.name,
-        title: d.title,
-        role: d.role,
-        password: d.pw,
-      });
-      if (!j) return false;
-      await initLogin();
-      $("#lu").value = j.username || "";
-      $("#lp").focus();
-      toast(
-        "Account created. Your username is " +
-          j.username +
-          ". An administrator must activate your account before you can sign in.",
-      );
-    },
-  );
-}
 const prodActs = (id) =>
   acts("prod", id) +
   " " +
-  (P(id).arch
+  (productById(id).arch
     ? ""
     : `<button class="b s stk" data-a="adj" data-id="${id}">Adjust stock</button>`);
 function rEmp() {
@@ -1232,20 +1251,20 @@ function rEmp() {
   tbl(
     "#etbl",
     [
-      ["Name", (u) => `<div class="pn">${av(u.name)}<b>${e(u.name)}</b></div>`],
-      ["Username", (u) => e(u.username), "m"],
-      ["Position", (u) => e(u.title)],
+      ["Name", (u) => `<div class="pn">${av(u.name)}<b>${esc(u.name)}</b></div>`],
+      ["Username", (u) => esc(u.username), "m"],
+      ["Position", (u) => esc(u.title)],
       [
         "Roles",
         (u) =>
           (u.roles || [])
             .map(
               (k) =>
-                `<span class="tg ${k == "admin" ? "ok" : ""}">${e(ROLE[k] || k)}</span>`,
+                `<span class="tg ${k == "admin" ? "ok" : ""}">${esc(ROLE[k] || k)}</span>`,
             )
             .join(" ") || "—",
       ],
-      ["Phone", (u) => e(u.phone), "m"],
+      ["Phone", (u) => esc(u.phone), "m"],
       [
         "Status",
         (u) =>
@@ -1257,7 +1276,7 @@ function rEmp() {
     db.emp.filter(
       (u) =>
         (!$("#ea").value || u.status == $("#ea").value) &&
-        (u.name + u.title + rl(u.roles)).toLowerCase().includes(q),
+        (u.name + u.title + roleLabels(u.roles)).toLowerCase().includes(q),
     ),
     "No employees match your filter.",
     (u) => (u.status == "Inactive" ? "arch" : ""),
@@ -1267,7 +1286,7 @@ function rEmp() {
     Object.keys(ROLE)
       .map(
         (k) =>
-          `<p class="mu flush"><b>${ROLE[k]}</b><br>${e(DUTY[k][0])}<br>${e(DUTY[k][1])}</p>`,
+          `<p class="mu flush"><b>${ROLE[k]}</b><br>${esc(DUTY[k][0])}<br>${esc(DUTY[k][1])}</p>`,
       )
       .join("");
 }
@@ -1278,7 +1297,7 @@ function rLogs() {
   );
   rHist(q);
 }
-/* Record change history: previous values of edited, archived and restored records */
+/* Change history: shows the old values of records that were edited, archived or restored */
 const HT = {
   products: ["Product", "product_name"],
   categories: ["Category", "category_name"],
@@ -1324,9 +1343,9 @@ const hv = (k, v) =>
     : Array.isArray(v)
       ? v.join(", ")
       : k == "category_id"
-      ? nm("cats", +v)
+      ? nameOf("cats", +v)
       : k == "supplier_id"
-        ? nm("sup", +v)
+        ? nameOf("sup", +v)
         : k == "role_id"
           ? ROLE[["", "admin", "manager", "inventory", "cashier"][+v]] || v
           : String(v);
@@ -1362,7 +1381,7 @@ function rHist(q) {
     "#htbl",
     [
       ["When", (r) => r.h.t, "m"],
-      ["Record", (r) => `<b>${e(r.name)}</b><div class="mu2">${e(r.t)}</div>`],
+      ["Record", (r) => `<b>${esc(r.name)}</b><div class="mu2">${esc(r.t)}</div>`],
       [
         "Change",
         (r) =>
@@ -1375,20 +1394,20 @@ function rHist(q) {
             ? r.d
                 .map(
                   (x) =>
-                    `<div class="mu2"><b>${e(x[0])}:</b> ${e(x[1])} → ${e(x[2])}</div>`,
+                    `<div class="mu2"><b>${esc(x[0])}:</b> ${esc(x[1])} → ${esc(x[2])}</div>`,
                 )
                 .join("")
             : "—",
       ],
-      ["By", (r) => e(r.h.u)],
+      ["By", (r) => esc(r.h.u)],
     ],
     rows,
     "No changes recorded yet.",
   );
 }
-/* SETTINGS = the signed-in employee's own details (name, position, email, phone, password) */
+/* SETTINGS = the logged-in employee's own details (name, position, email, phone, password) */
 function rSet() {
-  const row = (r) => `<tr><td><b>${r[0]}</b></td><td>${e(r[1])}</td></tr>`;
+  const row = (r) => `<tr><td><b>${r[0]}</b></td><td>${esc(r[1])}</td></tr>`;
   $("#setv").innerHTML =
     `<table><tbody>${[
       ["Full name", me.name],
@@ -1414,15 +1433,15 @@ function rSet() {
 }
 function rProfile() {
   $("#profv").innerHTML =
-    `<div class="pn" data-st="margin-bottom:14px">${av(me.name)}<div><b>${e(me.name)}</b><div class="mu2">${e(me.title || "—")} · ${e(rl(me.roles))}</div></div></div><table><tbody>${[
+    `<div class="pn" data-st="margin-bottom:14px">${av(me.name)}<div><b>${esc(me.name)}</b><div class="mu2">${esc(me.title || "—")} · ${esc(roleLabels(me.roles))}</div></div></div><table><tbody>${[
       ["Username", me.username],
       ["Email", me.email || "—"],
       ["Mobile number", me.phone || "—"],
-      [(me.roles || []).length > 1 ? "Roles" : "Role", rl(me.roles)],
+      [(me.roles || []).length > 1 ? "Roles" : "Role", roleLabels(me.roles)],
       ["Account created", me.cr || "—"],
       ["Last updated", me.up || "—"],
     ]
-      .map((r) => `<tr><td><b>${r[0]}</b></td><td>${e(r[1])}</td></tr>`)
+      .map((r) => `<tr><td><b>${r[0]}</b></td><td>${esc(r[1])}</td></tr>`)
       .join("")}</tbody></table>`;
 }
 function editMyInfo() {
@@ -1502,12 +1521,12 @@ function setForm() {
   if (h)
     h.insertAdjacentHTML(
       "afterend",
-      `<p class="mu">Created ${e(db.set.cr || "—")} · Last updated ${e(db.set.up || "—")}</p>`,
+      `<p class="mu">Created ${esc(db.set.cr || "—")} · Last updated ${esc(db.set.up || "—")}</p>`,
     );
 }
-// STOCK COUNT CORRECTION
+// FIX THE STOCK COUNT
 function adjust(id) {
-  const p = P(id);
+  const p = productById(id);
   openForm(
     "Update quantity: " + p.name,
     [
@@ -1528,7 +1547,7 @@ function adjust(id) {
     },
   );
 }
-/* MOCK NOTIFICATIONS */
+/* NOTIFICATIONS (not from a real notifications table yet) */
 const seen = new Set();
 const notes = () => [
   ...actv("prod")
@@ -1539,7 +1558,7 @@ const notes = () => [
       t: (p.stock ? "Low stock: " : "Out of stock: ") + p.name,
       s: `${p.stock} ${p.unit} left, reorder level ${p.min}`,
     })),
-]; // TODO: GET /api/notifications
+]; // TODO: get these from the server later (api/notifications)
 function badge() {
   const n = notes().filter((x) => !seen.has(x.id)).length;
   $("#bgc").textContent = n || "";
@@ -1550,7 +1569,7 @@ document.addEventListener("click", (ev) => {
     $$(".pop").forEach((p) => p.classList.add("hide"));
 });
 ["#eq", "#lq"].forEach((s) => ($(s).oninput = () => show(cur)));
-/* LOGIN PASSWORD CHECKED AGAINST THE HASH*/
+/* LOGIN: the server checks the password against the saved hash*/
 const loginTouched = new Set();
 function paintLogin(inp, msg) {
   const lb = inp.closest("label");
@@ -1559,7 +1578,7 @@ function paintLogin(inp, msg) {
   if (msg) inp.setAttribute("aria-invalid", "true");
   else inp.removeAttribute("aria-invalid");
 }
-/* returns true when the field is INVALID */
+/* gives true if the field is WRONG */
 function checkLogin(inp) {
   const msg =
     inp.value.trim() !== ""
@@ -1626,7 +1645,7 @@ $("#lf").onsubmit = async (ev) => {
         : st == 0
           ? "Cannot reach the server. Is Apache/MySQL running?"
           : (api.last || {}).error || "Sign in failed. Try again.";
-    lb.classList.add("e"); /* stays red until the user edits the password */
+    lb.classList.add("e"); /* stays red until the user changes the password */
     lb.dataset.srv = "1";
     $("#lp").setAttribute("aria-invalid", "true");
     $("#lp").value = "";
@@ -1716,7 +1735,6 @@ document.addEventListener("click", (ev) => {
     empst: () => setEmpStatus(+d.id, d.to),
     mv: () => (can("stock") ? mvForm(d.t) : deny()),
     newsale: () => (can("sell") ? newSale() : deny()),
-    signup: signUp,
     po: () => toast("Purchase orders are not enabled for this store yet"),
     sale: () => saleInfo(d.id),
     exp: () => toast("Preparing " + d.t + " export"),
@@ -1759,7 +1777,7 @@ function applyTheme(t, save) {
       localStorage.setItem("th", t);
     } catch (_) {}
   syncThemeUI();
-  if (me) show(cur); /* redraw so charts pick up the new colours */
+  if (me) show(cur); /* redraw the page so the charts use the new colors */
 }
 try {
   const t = localStorage.getItem("th");
@@ -1769,14 +1787,14 @@ syncThemeUI();
 ["#th", "#lth"].forEach(
   (s) => ($(s).onclick = () => applyTheme(isDark() ? "light" : "dark", true)),
 );
-/* follow the operating system while the user has not picked a theme */
+/* use the computer's own light/dark setting if the user hasn't picked one yet */
 osDark.addEventListener("change", () => {
   if (!root.dataset.theme) {
     syncThemeUI();
     if (me) show(cur);
   }
 });
-/* ============ COMMAND CENTER, STATUS, TIMELINE, NOTIFICATIONS ============ */
+/* ============ DASHBOARD, STATUS, TIMELINE, NOTIFICATIONS ============ */
 const CC = [
     "#2563EB",
     "#F59E0B",
@@ -1800,7 +1818,7 @@ const stc = (p) =>
 const pb = (p) =>
   `<div class="pb"><i class="${stc(p)[1]}" data-st="width:${Math.min(100, Math.round((p.stock / (p.min * 3 || p.stock || 1)) * 100))}%"></i></div>`;
 const stk = (p) =>
-  `<div data-st="min-width:110px"><b>${p.stock}</b> <span class="mu2">${e(p.unit)}</span>${pb(p)}</div>`;
+  `<div data-st="min-width:110px"><b>${p.stock}</b> <span class="mu2">${esc(p.unit)}</span>${pb(p)}</div>`;
 const bdg = (p) =>
   p.arch
     ? '<span class="tg">Archived</span>'
@@ -1844,7 +1862,7 @@ function cnt() {
     el.append(sp);
     return { sp, to, f, last: "" };
   });
-  // NUMBER ANIMATIONN CHUCHU
+  // NUMBER COUNTING ANIMATION (the numbers count up)
   items.forEach((i) => {
     i.sp.style.minWidth = Math.ceil(i.sp.getBoundingClientRect().width) + "px";
   });
@@ -1868,7 +1886,7 @@ function cnt() {
     if (live) requestAnimationFrame(tick);
   })(performance.now());
 }
-// DASHBOARD COMMAND CENTER
+// DASHBOARD (THE COMMAND CENTER)
 const AVC = ["#2563EB", "#EA580C", "#0D9488", "#9333EA", "#E11D48", "#0891B2"],
   ini = (n) =>
     n
@@ -1981,22 +1999,29 @@ function rHome() {
     .slice(0, 4);
   const mv = db.mov.slice(-6).reverse(),
     lg = db.logs.slice(-7).reverse();
-  $("#dash").innerHTML = `<div class="dg">
-<div class="hr"><div><div class="eb">${new Date().toLocaleDateString("en-PH", { weekday: "long", month: "long", day: "numeric" })}</div><h2>${gr}, ${e(fn)}!</h2><div class="rl">${e(rl(me.roles))} · Stock Keeper</div><p data-st="margin-top:12px">${low.length ? `<b>${low.length} item${low.length > 1 ? "s" : ""}</b> need restocking${out ? `, ${out} already out of stock` : ""}. ` : "All stock levels are healthy. "}${tx} sales logged so far, worth ${money(rev)}.</p><div class="hq">${qa.map((a, i) => `<button class="hb${i ? "" : " o"}" ${a[1]}><span class="ms">${a[2]}</span>${a[3]}</button>`).join("")}</div></div>
-<div class="rv"><div class="eb">Revenue · last 7 days</div><b data-n="${wk}" data-f="m">0</b><div class="rvs"><span class="dl ${dl < 0 ? "dn" : ""}"><span class="ms">${dl < 0 ? "trending_down" : "trending_up"}</span>${Math.abs(dl)}%</span><span>Latest day ${money(ld)} vs daily avg</span></div>${dv.length > 1 ? `<svg viewBox="0 0 260 72" preserveAspectRatio="none" width="100%" height="72"><defs><linearGradient id="sg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FBBF24" stop-opacity=".45"/><stop offset="1" stop-color="#FBBF24" stop-opacity="0"/></linearGradient></defs><path d="${pth} L260 72 L0 72Z" fill="url(#sg)"/><path d="${pth}" fill="none" stroke="#FBBF24" stroke-width="2.5" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>` : ""}</div></div>
-<div class="s4 tile" data-st="background:linear-gradient(135deg,#1E4FBF,#3B82F6)"><div class="t1"><span class="ms">warehouse</span>Inventory value</div><b data-n="${val}" data-f="m">0</b><div class="t2">${PR.length} products across ${actv("cats").length} categories</div><div class="sb">${cv.map((c) => `<i title="${e(c[0].name)}" data-st="flex:${c[1] || 1};background:${cc(c[0].id)}"></i>`).join("")}</div></div>
-<div class="s4 tile" data-st="background:linear-gradient(135deg,#C2410C,#F59E0B)"><div class="t1"><span class="ms">warning</span>Needs restocking</div><b data-n="${low.length}">0</b><div class="t2">Est. restock cost ${money(rs)}</div><button class="hb" data-v="products" data-st="margin-top:14px">Review items</button></div>
-<div class="s4 tile" data-st="background:linear-gradient(135deg,#0F766E,#14B8A6)"><div class="t1"><span class="ms">receipt_long</span>Sales performance</div><b data-n="${tx}">0</b><div class="t2">Avg. ticket ${money(tk)}${top[0] ? ` · Top: ${e(P(+top[0][0]).name)}` : ""}</div></div>
-<div class="s8 w">${wh("Sales trend", "Daily revenue, last 7 days of activity", "reports")}<div class="cv"><canvas id="h1"></canvas></div></div>
-<div class="s4 w">${wh("Inventory health", ok + " of " + PR.length + " products above reorder level")}<div class="hl"><canvas id="h2"></canvas><div class="ct"><div><b>${hs}%</b><span class="mu2">healthy</span></div></div></div><div class="lgd"><span><span class="cd" data-st="--c:#10B981"></span>${ok} healthy</span><span><span class="cd" data-st="--c:#F59E0B"></span>${low.length - out} low</span><span><span class="cd" data-st="--c:#EF4444"></span>${out} out</span></div></div>
-<div class="s5 w">${wh("Needs restocking", "Lowest stock first", "products")}${
+  /* The HTML of each dashboard card is saved here with a name, then we put them together in order below. */
+  const hero = `<div class="hr"><div><div class="eb">${new Date().toLocaleDateString("en-PH", { weekday: "long", month: "long", day: "numeric" })}</div><h2>${gr}, ${esc(fn)}!</h2><div class="rl">${esc(roleLabels(me.roles))} · Stock Keeper</div><p data-st="margin-top:12px">${low.length ? `<b>${low.length} item${low.length > 1 ? "s" : ""}</b> need restocking${out ? `, ${out} already out of stock` : ""}. ` : "All stock levels are healthy. "}${tx} sales logged so far, worth ${money(rev)}.</p><div class="hq">${qa.map((a, i) => `<button class="hb${i ? "" : " o"}" ${a[1]}><span class="ms">${a[2]}</span>${a[3]}</button>`).join("")}</div></div>`;
+
+  const revenueCard = `<div class="rv"><div class="eb">Revenue · last 7 days</div><b data-n="${wk}" data-f="m">0</b><div class="rvs"><span class="dl ${dl < 0 ? "dn" : ""}"><span class="ms">${dl < 0 ? "trending_down" : "trending_up"}</span>${Math.abs(dl)}%</span><span>Latest day ${money(ld)} vs daily avg</span></div>${dv.length > 1 ? `<svg viewBox="0 0 260 72" preserveAspectRatio="none" width="100%" height="72"><defs><linearGradient id="sg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FBBF24" stop-opacity=".45"/><stop offset="1" stop-color="#FBBF24" stop-opacity="0"/></linearGradient></defs><path d="${pth} L260 72 L0 72Z" fill="url(#sg)"/><path d="${pth}" fill="none" stroke="#FBBF24" stroke-width="2.5" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>` : ""}</div></div>`;
+
+  const inventoryTile = `<div class="s4 tile" data-st="background:linear-gradient(135deg,#1E4FBF,#3B82F6)"><div class="t1"><span class="ms">warehouse</span>Inventory value</div><b data-n="${val}" data-f="m">0</b><div class="t2">${PR.length} products across ${actv("cats").length} categories</div><div class="sb">${cv.map((c) => `<i title="${esc(c[0].name)}" data-st="flex:${c[1] || 1};background:${cc(c[0].id)}"></i>`).join("")}</div></div>`;
+
+  const restockTile = `<div class="s4 tile" data-st="background:linear-gradient(135deg,#C2410C,#F59E0B)"><div class="t1"><span class="ms">warning</span>Needs restocking</div><b data-n="${low.length}">0</b><div class="t2">Est. restock cost ${money(rs)}</div><button class="hb" data-v="products" data-st="margin-top:14px">Review items</button></div>`;
+
+  const salesTile = `<div class="s4 tile" data-st="background:linear-gradient(135deg,#0F766E,#14B8A6)"><div class="t1"><span class="ms">receipt_long</span>Sales performance</div><b data-n="${tx}">0</b><div class="t2">Avg. ticket ${money(tk)}${top[0] ? ` · Top: ${esc(productById(+top[0][0]).name)}` : ""}</div></div>`;
+
+  const trendCard = `<div class="s8 w">${wh("Sales trend", "Daily revenue, last 7 days of activity", "reports")}<div class="cv"><canvas id="h1"></canvas></div></div>`;
+
+  const healthCard = `<div class="s4 w">${wh("Inventory health", ok + " of " + PR.length + " products above reorder level")}<div class="hl"><canvas id="h2"></canvas><div class="ct"><div><b>${hs}%</b><span class="mu2">healthy</span></div></div></div><div class="lgd"><span><span class="cd" data-st="--c:#10B981"></span>${ok} healthy</span><span><span class="cd" data-st="--c:#F59E0B"></span>${low.length - out} low</span><span><span class="cd" data-st="--c:#EF4444"></span>${out} out</span></div></div>`;
+
+  const restockList = `<div class="s5 w">${wh("Needs restocking", "Lowest stock first", "products")}${
     low.length
       ? low
           .sort((a, b) => a.stock / (a.min || 1) - b.stock / (b.min || 1))
           .slice(0, 5)
           .map(
             (p) =>
-              `<div class="li"><span class="ch" data-st="--c:${cc(p.cat)}"><span class="ms">${ci(p.cat)}</span></span><div><b>${e(p.name)}</b><div class="mu2">${p.stock} ${e(p.unit)} left · reorder at ${p.min} · ${e(nm("sup", p.sup))}</div>${pb(p)}</div>${can("manage") || can("stock") ? '<button class="b s" data-a="po">Create PO</button>' : ""}</div>`,
+              `<div class="li"><span class="ch" data-st="--c:${cc(p.cat)}"><span class="ms">${ci(p.cat)}</span></span><div><b>${esc(p.name)}</b><div class="mu2">${p.stock} ${esc(p.unit)} left · reorder at ${p.min} · ${esc(nameOf("sup", p.sup))}</div>${pb(p)}</div>${can("manage") || can("stock") ? '<button class="b s" data-a="po">Create PO</button>' : ""}</div>`,
           )
           .join("")
       : empty(
@@ -2004,22 +2029,46 @@ function rHome() {
           "Stock is healthy",
           "Nothing is below its reorder level.",
         )
-  }</div>
-<div class="s7 w">${wh("Recent sales", "Click a sale to open its receipt", "sales")}${
+  }</div>`;
+
+  const recentSales = `<div class="s7 w">${wh("Recent sales", "Click a sale to open its receipt", "sales")}${
     db.sales
       .slice(-5)
       .reverse()
       .map(
         (s) =>
-          `<div class="li" data-a="sale" data-id="${s.id}"><span class="ch" data-st="--c:${PAY[s.pay] || "#2563EB"}">${ini(s.cust.replace(/^(Engr\.|Dra\.|Aling|Mang|Kuya|Ate)\s/, ""))}</span><div><b>${e(s.cust)}</b><div class="mu2">${s.id} · ${s.items.length} item${s.items.length > 1 ? "s" : ""} · ${e(s.by || "—")}</div></div><div data-st="text-align:right"><b class="m">${money(total(s))}</b><div><span class="st" data-st="--c:${PAY[s.pay] || "#2563EB"}">${e(s.pay)}</span></div></div></div>`,
+          `<div class="li" data-a="sale" data-id="${s.id}"><span class="ch" data-st="--c:${PAY[s.pay] || "#2563EB"}">${ini(s.cust.replace(/^(Engr\.|Dra\.|Aling|Mang|Kuya|Ate)\s/, ""))}</span><div><b>${esc(s.cust)}</b><div class="mu2">${s.id} · ${s.items.length} item${s.items.length > 1 ? "s" : ""} · ${esc(s.by || "—")}</div></div><div data-st="text-align:right"><b class="m">${money(total(s))}</b><div><span class="st" data-st="--c:${PAY[s.pay] || "#2563EB"}">${esc(s.pay)}</span></div></div></div>`,
       )
       .join("") ||
     empty("receipt_long", "No sales yet", "Completed sales will appear here.")
-  }</div>
-<div class="s6 w">${wh("Inventory movements", "Latest stock in and out", "movements")}${mv.map((m) => `<div class="li"><span class="ch" data-st="--c:${m.type == "IN" ? "#10B981" : "#EF4444"}"><span class="ms">${m.type == "IN" ? "south_west" : "north_east"}</span></span><div><b>${e(P(m.pid).name || "—")}</b><div class="mu2">${e(m.note)} · ${e(m.by || "—")}</div></div><div data-st="text-align:right"><b class="m" data-st="color:${m.type == "IN" ? "#10B981" : "#EF4444"}">${m.type == "IN" ? "+" : "−"}${m.qty}</b><div class="mu2">${fd(m.date)}</div></div></div>`).join("") || empty("swap_vert", "No movements yet", "Stock in and out will appear here.")}</div>
-<div class="s6 w">${wh("Team activity", "What your staff has been doing", "logs")}<div class="feed">${lg.map((l) => `<div class="fi">${av(l.u)}<div><b>${e(l.u)}</b> <span class="mu2">· ${ROLE[l.r]}</span><div>${e(l.a)}</div></div><span class="mu2">${fd(l.t)}, ${l.t.slice(11)}</span></div>`).join("")}</div></div>
-<div class="s6 w">${wh("Top-selling products", "By revenue")}${top.map((t) => `<div class="li"><div data-st="flex:1"><div data-st="display:flex;justify-content:space-between"><b>${e(P(+t[0]).name)}</b><span class="m">${money(t[1])}</span></div><div class="tb"><i data-st="--c:${cc(P(+t[0]).cat)};width:${Math.round((t[1] / tm) * 100)}%"></i></div></div></div>`).join("") || empty("trending_up", "No sales data yet", "Top sellers appear after the first sale.")}</div>
-<div class="s6 w">${wh("Stock by category", "Units on hand")}<div class="cv"><canvas id="h3"></canvas></div></div></div>`;
+  }</div>`;
+
+  const movementsCard = `<div class="s6 w">${wh("Inventory movements", "Latest stock in and out", "movements")}${mv.map((m) => `<div class="li"><span class="ch" data-st="--c:${m.type == "IN" ? "#10B981" : "#EF4444"}"><span class="ms">${m.type == "IN" ? "south_west" : "north_east"}</span></span><div><b>${esc(productById(m.pid).name || "—")}</b><div class="mu2">${esc(m.note)} · ${esc(m.by || "—")}</div></div><div data-st="text-align:right"><b class="m" data-st="color:${m.type == "IN" ? "#10B981" : "#EF4444"}">${m.type == "IN" ? "+" : "−"}${m.qty}</b><div class="mu2">${fd(m.date)}</div></div></div>`).join("") || empty("swap_vert", "No movements yet", "Stock in and out will appear here.")}</div>`;
+
+  const activityCard = `<div class="s6 w">${wh("Team activity", "What your staff has been doing", "logs")}<div class="feed">${lg.map((l) => `<div class="fi">${av(l.u)}<div><b>${esc(l.u)}</b> <span class="mu2">· ${ROLE[l.r]}</span><div>${esc(l.a)}</div></div><span class="mu2">${fd(l.t)}, ${l.t.slice(11)}</span></div>`).join("")}</div></div>`;
+
+  const topProducts = `<div class="s6 w">${wh("Top-selling products", "By revenue")}${top.map((t) => `<div class="li"><div data-st="flex:1"><div data-st="display:flex;justify-content:space-between"><b>${esc(productById(+t[0]).name)}</b><span class="m">${money(t[1])}</span></div><div class="tb"><i data-st="--c:${cc(productById(+t[0]).cat)};width:${Math.round((t[1] / tm) * 100)}%"></i></div></div></div>`).join("") || empty("trending_up", "No sales data yet", "Top sellers appear after the first sale.")}</div>`;
+
+  const categoryStock = `<div class="s6 w">${wh("Stock by category", "Units on hand")}<div class="cv"><canvas id="h3"></canvas></div></div>`;
+
+  $("#dash").innerHTML =
+    `<div class="dg">` +
+    [
+      hero,
+      revenueCard,
+      inventoryTile,
+      restockTile,
+      salesTile,
+      trendCard,
+      healthCard,
+      restockList,
+      recentSales,
+      movementsCard,
+      activityCard,
+      topProducts,
+      categoryStock,
+    ].join("\n") +
+    `</div>`;
   cnt();
   const ln = getComputedStyle(document.documentElement)
       .getPropertyValue("--ln")
@@ -2138,13 +2187,13 @@ function tlHtml(L) {
         hd = day != d ? `<div class="tld">${(d = day)}</div>` : "";
       return (
         hd +
-        `<div class="tli"><span class="ti" data-st="--c:${k[1]}"><span class="ms">${k[0]}</span></span><div><b>${e(l.a)}</b><div class="mu2">${e(l.u)} · ${ROLE[l.r]} · ${l.t.slice(11)}</div></div></div>`
+        `<div class="tli"><span class="ti" data-st="--c:${k[1]}"><span class="ms">${k[0]}</span></span><div><b>${esc(l.a)}</b><div class="mu2">${esc(l.u)} · ${ROLE[l.r]} · ${l.t.slice(11)}</div></div></div>`
       );
     }).join("") +
     "</div>"
   );
 }
-/* NOTIF CENTER */
+/* NOTIFICATION CENTER */
 const NM = {
   low: ["warning", "var(--k-stock)", "Inventory"],
   out: ["error", "var(--k-del)", "Inventory"],
@@ -2170,7 +2219,7 @@ $("#bell").onclick = () => {
           g[1]
             .map(
               (n) =>
-                `<div class="nt" data-v="${n.v}" data-st="--c:${n.m[1]}"><span class="ti"><span class="ms">${n.m[0]}</span></span><div data-st="flex:1"><div data-st="font-weight:${seen.has(n.id) ? 400 : 700}">${e(n.t)}</div><div class="mu2">${e(n.s)}</div></div><span class="mu2">${n.ago}</span></div>`,
+                `<div class="nt" data-v="${n.v}" data-st="--c:${n.m[1]}"><span class="ti"><span class="ms">${n.m[0]}</span></span><div data-st="flex:1"><div data-st="font-weight:${seen.has(n.id) ? 400 : 700}">${esc(n.t)}</div><div class="mu2">${esc(n.s)}</div></div><span class="mu2">${n.ago}</span></div>`,
             )
             .join(""),
       )
@@ -2182,8 +2231,8 @@ $("#bell").onclick = () => {
       ));
   p.classList.toggle("hide");
 };
-/* Start: restore an existing session, otherwise show the login screen */
+/* Start of the app: if the user is still logged in, go straight in. If not, show the login screen */
 (async () => {
   if (await load(true)) startUI(false);
   else initLogin();
-})();
+})();

@@ -20,22 +20,22 @@ CREATE TABLE users (
   full_name      VARCHAR(100)     NOT NULL,
   username       VARCHAR(40)      NOT NULL,
   email          VARCHAR(120)     NOT NULL,
-  password_hash  VARCHAR(255)     NOT NULL,           -- output of PHP password_hash(); never a plain password
+  password_hash  VARCHAR(255)     NOT NULL,           -- the scrambled (hashed) password from PHP, never the real password
   job_title      VARCHAR(80)      NULL,
   phone          VARCHAR(30)      NULL,
   status         ENUM('Active','Inactive') NOT NULL DEFAULT 'Active',
-  created_at     TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- set once when the account is created
-  updated_at     TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,  -- refreshed on every change
-  -- Employees are never deleted or archived: `status` (Active/Inactive) controls sign-in.
+  created_at     TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- filled in when the account is made
+  updated_at     TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,  -- updates by itself every time the row changes
+  -- Employees are never deleted or archived. The `status` (Active/Inactive) decides if they can log in.
   CONSTRAINT pk_users PRIMARY KEY (user_id),
   CONSTRAINT uq_users_username UNIQUE (username),
   CONSTRAINT uq_users_email    UNIQUE (email),
-  -- Defence in depth: the database itself refuses short/readable values such as 'Password123'.
+  -- Extra safety: the database also rejects short or readable values like 'Password123' (it must be a real hash).
   CONSTRAINT chk_users_hash CHECK (CHAR_LENGTH(password_hash) >= 60 AND password_hash LIKE '$%')
 ) ENGINE=InnoDB;
 
--- USER ROLES (many-to-many: an employee can hold several roles and a role can be held by many employees)
--- An employee's permissions are the UNION of all roles they hold. Every employee keeps at least one role (enforced by api.php).
+-- USER ROLES (an employee can have many roles, and a role can belong to many employees)
+-- An employee can do everything that any of their roles can do. Every employee must have at least one role (api.php makes sure of this).
 CREATE TABLE user_roles (
   user_id      INT UNSIGNED     NOT NULL,
   role_id      TINYINT UNSIGNED NOT NULL,
@@ -53,9 +53,9 @@ CREATE TABLE categories (
   category_id    SMALLINT UNSIGNED NOT NULL AUTO_INCREMENT,
   category_name  VARCHAR(60)       NOT NULL,
   description    VARCHAR(255)      NULL,
-  archived_at    DATETIME         NULL DEFAULT NULL,  -- NULL = active, timestamp = archived (restorable)
-  created_at     DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- set once when the record is created
-  updated_at     DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,  -- refreshed automatically on every change
+  archived_at    DATETIME         NULL DEFAULT NULL,  -- empty (NULL) = active, has a date = archived (can be restored)
+  created_at     DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- filled in when the record is made
+  updated_at     DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,  -- updates by itself every time the row changes
   CONSTRAINT pk_categories PRIMARY KEY (category_id),
   CONSTRAINT uq_categories_name UNIQUE (category_name)
 ) ENGINE=InnoDB;
@@ -67,14 +67,14 @@ CREATE TABLE suppliers (
   contact_person  VARCHAR(100)      NOT NULL,
   phone           VARCHAR(30)       NOT NULL,
   email           VARCHAR(120)      NULL,
-  address         VARCHAR(255)      NOT NULL,                 -- full one-line address, built by api.php from the four parts below
+  address         VARCHAR(255)      NOT NULL,                 -- whole address in one line, api.php builds it from the four parts below
   street          VARCHAR(120)      NULL,                     -- street / building (optional)
   barangay        VARCHAR(80)       NULL,
   city            VARCHAR(80)       NULL,
   province        VARCHAR(80)       NULL,
-  archived_at    DATETIME         NULL DEFAULT NULL,  -- NULL = active, timestamp = archived (restorable)
-  created_at     DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- set once when the record is created
-  updated_at     DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,  -- refreshed automatically on every change
+  archived_at    DATETIME         NULL DEFAULT NULL,  -- empty (NULL) = active, has a date = archived (can be restored)
+  created_at     DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- filled in when the record is made
+  updated_at     DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,  -- updates by itself every time the row changes
   CONSTRAINT pk_suppliers PRIMARY KEY (supplier_id),
   CONSTRAINT uq_suppliers_company UNIQUE (company_name)
 ) ENGINE=InnoDB;
@@ -88,9 +88,9 @@ CREATE TABLE products (
   stock_quantity  INT               NOT NULL DEFAULT 0,
   reorder_level   INT               NOT NULL DEFAULT 10,
   unit            VARCHAR(20)       NOT NULL DEFAULT 'pcs',
-  archived_at    DATETIME         NULL DEFAULT NULL,  -- NULL = active, timestamp = archived (restorable)
-  created_at     DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- set once when the record is created
-  updated_at     DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,  -- refreshed automatically on every change
+  archived_at    DATETIME         NULL DEFAULT NULL,  -- empty (NULL) = active, has a date = archived (can be restored)
+  created_at     DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- filled in when the record is made
+  updated_at     DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,  -- updates by itself every time the row changes
   CONSTRAINT pk_products PRIMARY KEY (product_id),
   CONSTRAINT uq_products_sku UNIQUE (sku),
   CONSTRAINT chk_products_price CHECK (unit_price > 0),
@@ -99,10 +99,10 @@ CREATE TABLE products (
   KEY idx_products_name (product_name)
 ) ENGINE=InnoDB;
 
--- PRODUCT CATEGORIES (many-to-many: a product can belong to several categories and a category holds many products)
--- is_primary marks the MAIN category of a product (used for the SKU prefix, the colour/icon and per-category totals, so
--- nothing is counted twice). Same pattern as product_suppliers: the generated column + UNIQUE key lets the database
--- guarantee at most ONE main category per product. If the main category is archived, the backend promotes another active one.
+-- PRODUCT CATEGORIES (a product can be in many categories, and a category can have many products)
+-- is_primary marks the MAIN category of a product. We use it for the SKU start, the color/icon and the totals per category,
+-- so nothing gets counted twice. Same idea as product_suppliers: the generated column + UNIQUE key makes sure
+-- a product has only ONE main category. If the main category is archived, the backend picks another active one.
 CREATE TABLE product_categories (
   product_id   INT UNSIGNED      NOT NULL,
   category_id  SMALLINT UNSIGNED NOT NULL,
@@ -111,7 +111,7 @@ CREATE TABLE product_categories (
   created_at   DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT pk_product_categories PRIMARY KEY (product_id, category_id),
   CONSTRAINT uq_product_main_category UNIQUE (primary_for),
-  -- RESTRICT on the product side: MySQL/MariaDB do not allow cascading actions on the base column of a stored generated column.
+  -- RESTRICT on the product side because MySQL/MariaDB don't allow cascading actions on the column that a stored generated column is based on.
   CONSTRAINT fk_pc_product FOREIGN KEY (product_id) REFERENCES products (product_id)
     ON UPDATE RESTRICT ON DELETE RESTRICT,
   CONSTRAINT fk_pc_category FOREIGN KEY (category_id) REFERENCES categories (category_id)
@@ -120,10 +120,10 @@ CREATE TABLE product_categories (
   KEY idx_pc_category (category_id)
 ) ENGINE=InnoDB;
 
--- PRODUCT SUPPLIERS (many-to-many: a product can have several suppliers and a supplier can supply many products)
--- is_primary marks the main supplier of a product. The generated column + UNIQUE key lets the database itself
--- guarantee at most ONE main supplier per product. If the main supplier withdraws (is archived), the backend
--- promotes another active supplier of that product to main.
+-- PRODUCT SUPPLIERS (a product can have many suppliers, and a supplier can supply many products)
+-- is_primary marks the main supplier of a product. The generated column + UNIQUE key makes the database itself
+-- allow only ONE main supplier per product. If the main supplier is archived, the backend
+-- makes another active supplier of that product the main one.
 CREATE TABLE product_suppliers (
   product_id   INT UNSIGNED      NOT NULL,
   supplier_id  SMALLINT UNSIGNED NOT NULL,
@@ -132,8 +132,8 @@ CREATE TABLE product_suppliers (
   created_at   DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT pk_product_suppliers PRIMARY KEY (product_id, supplier_id),
   CONSTRAINT uq_product_primary UNIQUE (primary_for),
-  -- RESTRICT (not CASCADE): MySQL/MariaDB do not allow cascading actions on the base column of a stored generated column.
-  -- Products are never deleted anyway (archive instead), so nothing is lost.
+  -- RESTRICT (not CASCADE) because MySQL/MariaDB don't allow cascading actions on the column that a stored generated column is based on.
+  -- Products are never deleted anyway (we archive them), so nothing is lost.
   CONSTRAINT fk_ps_product FOREIGN KEY (product_id) REFERENCES products (product_id)
     ON UPDATE RESTRICT ON DELETE RESTRICT,
   CONSTRAINT fk_ps_supplier FOREIGN KEY (supplier_id) REFERENCES suppliers (supplier_id)
@@ -148,11 +148,11 @@ CREATE TABLE inventory_movements (
   product_id     INT UNSIGNED    NOT NULL,
   user_id        INT UNSIGNED    NOT NULL,
   movement_type  ENUM('IN','OUT','ADJ_IN','ADJ_OUT') NOT NULL,
-  quantity       INT             NOT NULL,            -- always positive; direction comes from movement_type
+  quantity       INT             NOT NULL,            -- always a positive number, movement_type tells if it is in or out
   remarks        VARCHAR(255)    NULL,
   movement_date  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT pk_movements PRIMARY KEY (movement_id),
-  -- A product's stock history is removed only together with the product (possible only if never sold).
+  -- A product's stock history is only removed together with the product (only possible if it was never sold).
   CONSTRAINT fk_movements_product FOREIGN KEY (product_id) REFERENCES products (product_id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_movements_user FOREIGN KEY (user_id) REFERENCES users (user_id)
@@ -166,16 +166,16 @@ CREATE TABLE inventory_movements (
 -- CUSTOMERS
 CREATE TABLE customers (
   customer_id    INT UNSIGNED  NOT NULL AUTO_INCREMENT,
-  customer_code  VARCHAR(16)   NULL,                  -- auto-generated customer ID (CUST-0001), set right after the insert; two customers may share a name, never an ID
+  customer_code  VARCHAR(16)   NULL,                  -- customer ID made by the system (CUST-0001), set right after the insert. Two customers can have the same name but never the same ID
   customer_name  VARCHAR(120)  NOT NULL,
   phone          VARCHAR(30)   NOT NULL,              -- mobile number
   street         VARCHAR(150)  NULL,                  -- street / building (optional)
   barangay       VARCHAR(80)   NOT NULL,
   city           VARCHAR(80)   NOT NULL,
   province       VARCHAR(80)   NOT NULL,
-  archived_at    DATETIME      NULL DEFAULT NULL,     -- NULL = active, timestamp = archived (restorable)
-  created_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- set once when the record is created
-  updated_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,  -- refreshed automatically on every change
+  archived_at    DATETIME      NULL DEFAULT NULL,     -- empty (NULL) = active, has a date = archived (can be restored)
+  created_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- filled in when the record is made
+  updated_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,  -- updates by itself every time the row changes
   CONSTRAINT pk_customers PRIMARY KEY (customer_id),
   CONSTRAINT uq_customers_code UNIQUE (customer_code),
   KEY idx_customers_name (customer_name),
@@ -186,11 +186,11 @@ CREATE TABLE customers (
 CREATE TABLE sales (
   sale_id         INT UNSIGNED  NOT NULL AUTO_INCREMENT,
   receipt_number  VARCHAR(20)   NOT NULL,
-  user_id         INT UNSIGNED  NOT NULL,              -- the cashier who processed the sale
-  customer_id     INT UNSIGNED  NULL,                  -- registered customer; NULL = walk-in / older record
-  customer_name   VARCHAR(120)  NOT NULL DEFAULT 'Walk-in',  -- name as printed on the receipt (historical snapshot, kept even if the customer is edited later)
+  user_id         INT UNSIGNED  NOT NULL,              -- the cashier who made the sale
+  customer_id     INT UNSIGNED  NULL,                  -- saved customer. NULL = walk-in customer or an older record
+  customer_name   VARCHAR(120)  NOT NULL DEFAULT 'Walk-in',  -- name as shown on the receipt (saved as it was, so it stays the same even if the customer is edited later)
   payment_method  ENUM('Cash','GCash','Maya','Bank transfer','Charge account') NOT NULL,
-  total_amount    DECIMAL(12,2) NOT NULL DEFAULT 0.00, -- set by the backend as SUM(sale_items.subtotal) inside the sale transaction
+  total_amount    DECIMAL(12,2) NOT NULL DEFAULT 0.00, -- the backend computes this by adding up all the sale_items subtotals when it saves the sale
   sale_date       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT pk_sales PRIMARY KEY (sale_id),
   CONSTRAINT uq_sales_receipt UNIQUE (receipt_number),
@@ -210,9 +210,9 @@ CREATE TABLE sale_items (
   sale_item_id  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   sale_id       INT UNSIGNED    NOT NULL,
   product_id    INT UNSIGNED    NOT NULL,
-  product_name  VARCHAR(150)    NOT NULL DEFAULT '',      -- name at the time of sale (filled by trigger), so renaming a product never changes old receipts
+  product_name  VARCHAR(150)    NOT NULL DEFAULT '',      -- product name at the time of the sale (filled in by a trigger), so renaming a product doesn't change old receipts
   quantity      INT             NOT NULL,
-  unit_price    DECIMAL(10,2)   NOT NULL,              -- price charged at the time of sale (a historical fact about this line)
+  unit_price    DECIMAL(10,2)   NOT NULL,              -- price at the time of the sale (stays the same even if the price changes later)
   subtotal      DECIMAL(12,2)   GENERATED ALWAYS AS (quantity * unit_price) STORED,
   CONSTRAINT pk_sale_items PRIMARY KEY (sale_item_id),
   CONSTRAINT uq_sale_items_line UNIQUE (sale_id, product_id),
@@ -247,22 +247,22 @@ CREATE TABLE settings (
   tax_rate        DECIMAL(5,2)     NOT NULL DEFAULT 12.00,
   reorder_level   INT              NOT NULL DEFAULT 20,
   receipt_footer  VARCHAR(255)     NULL,
-  created_at      DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- set once when the settings row is created
-  updated_at      DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,  -- refreshed automatically on every change
+  created_at      DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP,  -- filled in when the settings row is made
+  updated_at      DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,  -- updates by itself every time the row changes
   CONSTRAINT pk_settings PRIMARY KEY (setting_id),
   CONSTRAINT chk_settings_single CHECK (setting_id = 1),
   CONSTRAINT chk_settings_tax CHECK (tax_rate >= 0 AND tax_rate <= 100)
 ) ENGINE=InnoDB;
 
--- RECORD HISTORY: append-only trail of every edit, archive and restore (old and new values), kept for future retrieval
+-- RECORD HISTORY: a list of every edit, archive and restore (with the old and new values). We only add rows, never change or remove them, so we can look back later.
 CREATE TABLE record_history (
   history_id   BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  table_name   VARCHAR(30)     NOT NULL,                 -- products, categories, suppliers, customers, users, settings
-  record_id    INT UNSIGNED    NOT NULL,                 -- primary key of the changed record
+  table_name   VARCHAR(30)     NOT NULL,                 -- which table: products, categories, suppliers, customers, users, settings
+  record_id    INT UNSIGNED    NOT NULL,                 -- id of the record that was changed
   change_type  ENUM('UPDATE','ARCHIVE','RESTORE') NOT NULL,
-  old_values   JSON            NOT NULL,                 -- the record before the change (passwords are never copied)
-  new_values   JSON            NOT NULL,                 -- the record after the change
-  changed_by   INT UNSIGNED    NULL,                     -- employee who made the change (set by api.php)
+  old_values   JSON            NOT NULL,                 -- how the record looked before the change (passwords are never copied)
+  new_values   JSON            NOT NULL,                 -- how the record looks after the change
+  changed_by   INT UNSIGNED    NULL,                     -- the employee who made the change (api.php sets this)
   changed_at   DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT pk_record_history PRIMARY KEY (history_id),
   CONSTRAINT fk_history_user FOREIGN KEY (changed_by) REFERENCES users (user_id)
@@ -272,8 +272,8 @@ CREATE TABLE record_history (
 ) ENGINE=InnoDB;
 
 -- =============================================================================
--- NO PERMANENT DELETION: the database refuses DELETE on business records (archive them instead).
--- Single-statement triggers, so no DELIMITER change is needed when importing.
+-- NO PERMANENT DELETE: the database won't allow DELETE on our business records (archive them instead).
+-- These triggers are only one statement each, so we don't need to change the DELIMITER when importing.
 -- =============================================================================
 CREATE TRIGGER trg_no_delete_categories BEFORE DELETE ON categories FOR EACH ROW
   SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Records are never permanently deleted. Archive the record instead.';
@@ -306,11 +306,11 @@ CREATE TRIGGER trg_no_update_activity_logs BEFORE UPDATE ON activity_logs FOR EA
 CREATE TRIGGER trg_no_update_record_history BEFORE UPDATE ON record_history FOR EACH ROW
   SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Historical records cannot be edited.';
 
--- SALE ITEM NAME SNAPSHOT (every new sale line stores the product name as it was when sold)
+-- SALE ITEM NAME COPY (every new sale line saves the product name as it was when sold)
 CREATE TRIGGER trg_sale_items_name BEFORE INSERT ON sale_items FOR EACH ROW
   SET NEW.product_name = COALESCE(NULLIF(NEW.product_name, ''), (SELECT p.product_name FROM products p WHERE p.product_id = NEW.product_id), '');
 
--- HISTORY TRIGGERS (copy old and new values into record_history on every real change)
+-- HISTORY TRIGGERS (copy the old and new values into record_history whenever something really changes)
 CREATE TRIGGER trg_hist_products AFTER UPDATE ON products FOR EACH ROW
   INSERT INTO record_history (table_name, record_id, change_type, old_values, new_values, changed_by)
   SELECT 'products', OLD.product_id,
@@ -371,10 +371,10 @@ CREATE TRIGGER trg_hist_settings AFTER UPDATE ON settings FOR EACH ROW
   WHERE NOT (OLD.store_name <=> NEW.store_name AND OLD.tax_rate <=> NEW.tax_rate AND OLD.reorder_level <=> NEW.reorder_level AND OLD.receipt_footer <=> NEW.receipt_footer);
 
 -- =============================================================================
--- Stock Keeper · Seed data (Filipino business records)
--- Every user below has the initial password  StockKeeper@2026  but is stored ONLY as a bcrypt hash.
--- Change these passwords after the first sign-in.
--- Each hash differs because password_hash() adds a random salt per call.
+-- Stock Keeper · Sample data (Filipino business records)
+-- Every user below starts with the password  StockKeeper@2026  but we only save it as a bcrypt hash (scrambled).
+-- Please change these passwords after the first login.
+-- Each hash looks different because password_hash() adds random extra characters (a salt) every time.
 -- =============================================================================
 
 INSERT INTO roles (role_id, role_name) VALUES
@@ -388,8 +388,8 @@ INSERT INTO users (user_id, full_name, username, email, password_hash, job_title
  (5,'Andrei Reyes','andrei.reyes','andrei.reyes@stockkeeper.example','$2y$10$ca95.VNFSo1PDhokfVmIou7/GX.Rh8uxFUr.5MiNFClsNHzcbrAza','Stockroom Assistant','0905 118 6672','Active'),
  (6,'Jhan Vincent Miraples','jhanvincent.miraples','jhanvincent.miraples@stockkeeper.example','$2y$10$QFBvsiurazpkxdfYfNs0Luz87GDOHcsUNAErNPTMFS1XYoFJwfYAG','Sales Associate','0977 836 2204','Active');
 
--- Every employee has at least one role. Sample data: Zosaine (Manager) also works as Inventory Staff,
--- and Althea (Cashier) also helps with stock.
+-- Every employee has at least one role. In the sample data, Zosaine (Manager) is also Inventory Staff,
+-- and Althea (Cashier) also helps with the stock.
 INSERT INTO user_roles (user_id, role_id) VALUES
  (1,1),(2,2),(3,3),(4,4),(5,3),(6,4),(2,3),(4,3);
 
@@ -439,7 +439,7 @@ INSERT INTO products (product_id, sku, product_name, unit_price, stock_quantity,
  (14,'PA-6010','Latex Paint White 4 L',890.00,28,12,'can'),
  (15,'FS-7001','Concrete Nails 3"',85.00,38,50,'kg');
 
--- Every product has one main category; a few are also listed under a second category (sample data)
+-- Every product has one main category, and a few also have a second category (sample data)
 INSERT INTO product_categories (product_id, category_id, is_primary) VALUES
  (1,1,1),
  (2,1,1),
@@ -463,7 +463,7 @@ INSERT INTO product_categories (product_id, category_id, is_primary) VALUES
  (14,3,0),
  (15,2,0);
 
--- Every product has one main supplier; a few also have a backup supplier (sample data)
+-- Every product has one main supplier, and a few also have a backup supplier (sample data)
 INSERT INTO product_suppliers (product_id, supplier_id, is_primary) VALUES
  (1,1,1),
  (2,1,1),
@@ -524,11 +524,11 @@ INSERT INTO sale_items (sale_id, product_id, quantity, unit_price) VALUES
  (10,14,3,890.00),(10,9,6,95.00),
  (11,1,80,265.00),(11,5,30,238.00);
 
--- sales.total_amount is derived from the line items (subtotal is a generated column)
+-- sales.total_amount is computed from the line items (subtotal is a generated column)
 UPDATE sales s SET s.total_amount = (SELECT SUM(si.subtotal) FROM sale_items si WHERE si.sale_id = s.sale_id);
--- (Foreign keys already use ON DELETE RESTRICT in the CREATE TABLE statements above.)
+-- (The foreign keys already use ON DELETE RESTRICT in the CREATE TABLE statements above.)
 
--- every sold line also appears in the stock ledger as an OUT movement (INSERT ... SELECT)
+-- every sold item is also recorded in the stock movements as an OUT (INSERT ... SELECT)
 INSERT INTO inventory_movements (product_id, user_id, movement_type, quantity, remarks, movement_date)
 SELECT si.product_id, s.user_id, 'OUT', si.quantity, CONCAT('Sale ', s.receipt_number), s.sale_date
 FROM sale_items si JOIN sales s ON s.sale_id = si.sale_id ORDER BY s.sale_date, si.sale_item_id;
@@ -551,19 +551,19 @@ INSERT INTO settings (setting_id, store_name, tax_rate, reorder_level, receipt_f
  (1,'Stock Keeper',12.00,20,'Thank you for your purchase.');
 
 -- =============================================================================
--- RECORD HISTORY (safe to run again): creates the history table and triggers only if they
--- are missing. For a database that already has data, run just this part, not the whole file
--- (the top of this file erases existing data).
+-- RECORD HISTORY (safe to run again): makes the history table and triggers only if they
+-- don't exist yet. If your database already has data, run just this part and not the whole file
+-- (the top of this file erases the existing data).
 -- =============================================================================
--- RECORD HISTORY: append-only trail of every edit, archive and restore (old and new values), kept for future retrieval
+-- RECORD HISTORY: a list of every edit, archive and restore (with the old and new values). We only add rows, never change or remove them, so we can look back later.
 CREATE TABLE IF NOT EXISTS record_history (
   history_id   BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  table_name   VARCHAR(30)     NOT NULL,                 -- products, categories, suppliers, customers, users, settings
-  record_id    INT UNSIGNED    NOT NULL,                 -- primary key of the changed record
+  table_name   VARCHAR(30)     NOT NULL,                 -- which table: products, categories, suppliers, customers, users, settings
+  record_id    INT UNSIGNED    NOT NULL,                 -- id of the record that was changed
   change_type  ENUM('UPDATE','ARCHIVE','RESTORE') NOT NULL,
-  old_values   JSON            NOT NULL,                 -- the record before the change (passwords are never copied)
-  new_values   JSON            NOT NULL,                 -- the record after the change
-  changed_by   INT UNSIGNED    NULL,                     -- employee who made the change (set by api.php)
+  old_values   JSON            NOT NULL,                 -- how the record looked before the change (passwords are never copied)
+  new_values   JSON            NOT NULL,                 -- how the record looks after the change
+  changed_by   INT UNSIGNED    NULL,                     -- the employee who made the change (api.php sets this)
   changed_at   DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT pk_record_history PRIMARY KEY (history_id),
   CONSTRAINT fk_history_user FOREIGN KEY (changed_by) REFERENCES users (user_id)
