@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#f2f5fa" />
+    <title>Stock Keeper – Store Management</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%8F%97%EF%B8%8F%3C/text%3E%3C/svg%3E"
+    />
+    <!-- Fonts and icons we use -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500&family=Material+Symbols+Outlined&display=swap"
+    />
+    <!-- Bootstrap (basic styles and helper classes) -->
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+      crossorigin="anonymous"
+    />
+
+    <link rel="stylesheet" href="style.css?v=202610221200" />
+  </head>
+  <body>
+    <aside>
+      <div class="brand">
+        <span class="ms">construction</span>
+        <div><b>Stock Keeper</b><small>Building supply · Laguna</small></div>
+      </div>
+      <nav id="nav"></nav>
+      <nav class="sfn" id="sfn">
+        <div class="ng">Account</div>
+        <button data-v="profile">
+          <span class="ms">account_circle</span>Profile
+        </button>
+        <button data-v="settings">
+          <span class="ms">settings</span>Settings
+        </button>
+        <button data-a="out"><span class="ms">logout</span>Logout</button>
+      </nav>
+      <div class="sf" id="sf"></div>
+    </aside>
+    <div id="ov"></div>
+    <main>
+      <header>
+        <button class="b" id="menu" aria-label="Open menu">
+          <span class="ms">menu</span>
+        </button>
+        <input
+          class="gs"
+          id="gs"
+          type="search"
+          placeholder="Search products or SKU"
+          aria-label="Global product search"
+        /><span class="grow"></span>
+        <div class="rel">
+          <button class="b" id="bell" aria-label="Notifications">
+            <span class="ms">notifications</span><span id="bgc"></span>
+          </button>
+          <div class="pop hide" id="np"></div>
+        </div>
+        <button class="b" id="th" aria-label="Toggle dark mode">
+          <span class="ms">contrast</span>
+        </button>
+      </header>
+
+      <div class="ph">
+        <nav class="bc" id="bc" aria-label="Breadcrumb"></nav>
+        <h1 id="ttl"></h1>
+      </div>
+      <section class="v" id="dashboard"><div id="dash"></div></section>
+
+      <section class="v" id="products">
+        <div class="bar">
+          <input
+            id="pq"
+            type="search"
+            placeholder="Search by name or SKU"
+          /><select id="pc" aria-label="Category filter"></select
+          ><select id="pa" class="af" aria-label="Archive filter">
+            <option value="">Active</option>
+            <option value="arch">Archived</option>
+            <option value="all">Active + archived</option></select
+          ><button class="b p adm" data-a="edit" data-s="prod">
+            Add product
+          </button>
+        </div>
+        <div class="card tw" id="ptbl"></div>
+      </section>
+
+      <section class="v" id="categories">
+        <div class="bar">
+          <select id="ca" class="af" aria-label="Archive filter">
+            <option value="">Active</option>
+            <option value="arch">Archived</option>
+            <option value="all">Active + archived</option>
+          </select>
+          <button class="b p" data-a="edit" data-s="cat">Add category</button>
+        </div>
+        <div class="card tw" id="ctbl"></div>
+      </section>
+
+      <section class="v" id="suppliers">
+        <div class="bar">
+          <select id="sa" class="af" aria-label="Archive filter">
+            <option value="">Active</option>
+            <option value="arch">Archived</option>
+            <option value="all">Active + archived</option>
+          </select>
+          <button class="b p adm" data-a="edit" data-s="sup">
+            Add supplier
+          </button>
+        </div>
+        <div class="card tw" id="stbl"></div>
+      </section>
+
+      <section class="v" id="movements">
+        <div class="bar">
+          <button class="b p stk" data-a="mv" data-t="IN">Stock in</button
+          ><button class="b stk" data-a="mv" data-t="OUT">Stock out</button
+          ><select id="mf" aria-label="Movement filter">
+            <option value="">All activity</option>
+            <option value="IN">Stock in only</option>
+            <option value="OUT">Stock out only</option>
+          </select>
+        </div>
+        <div class="card tw" id="mtbl"></div>
+      </section>
+
+      <section class="v" id="sales">
+        <div class="bar">
+          <input
+            id="sq"
+            type="search"
+            placeholder="Search by receipt no., customer ID or name"
+          /><button class="b p sl" data-a="newsale">New sale</button>
+        </div>
+        <div class="card tw" id="stbl2"></div>
+      </section>
+
+      <section class="v" id="customers">
+        <div class="bar">
+          <input
+            id="cq"
+            type="search"
+            placeholder="Search by ID, name, barangay or city"
+          /><select id="cua" class="af" aria-label="Archive filter">
+            <option value="">Active</option>
+            <option value="arch">Archived</option>
+            <option value="all">Active + archived</option></select
+          ><button class="b p" data-a="edit" data-s="cust">Add customer</button>
+        </div>
+        <div class="card tw" id="cutbl"></div>
+      </section>
+
+      <section class="v" id="reports">
+        <div class="card">
+          <h3>Inventory report</h3>
+          <div class="tw" id="rinv"></div>
+          <p class="mu" id="rtot"></p>
+        </div>
+        <div class="g2">
+          <div class="card">
+            <h3>Sales report: revenue per day</h3>
+            <div class="cv"><canvas id="c3"></canvas></div>
+          </div>
+          <div class="card">
+            <h3>Sales by payment method</h3>
+            <div class="tw" id="rpay"></div>
+          </div>
+        </div>
+      </section>
+      <section class="v" id="employees">
+        <div class="bar">
+          <input id="eq" type="search" placeholder="Search employees" /><select id="ea" class="af" aria-label="Status filter">
+            <option value="">All statuses</option>
+            <option value="Active">Active only</option>
+            <option value="Inactive">Inactive only</option></select
+          ><button class="b p" data-a="edit" data-s="emp">Add employee</button>
+        </div>
+        <div class="card tw" id="etbl"></div>
+        <div class="card gap-top" id="roles"></div>
+        <p class="mu">
+          An employee can hold more than one role and gets the permissions of
+          all of them. Inactive accounts cannot sign in. Employees are never
+          deleted: switching an account to Inactive keeps its full history and
+          you can reactivate it at any time.
+        </p>
+      </section>
+      <section class="v" id="logs">
+        <div class="bar">
+          <input id="lq" type="search" placeholder="Search by user, action or record" />
+        </div>
+        <div class="card tw" id="ltbl"></div>
+        <div class="card gap-top">
+          <h3>Record change history</h3>
+          <p class="mu">Every edit, archive and restore keeps the previous values here so they can be looked up later.</p>
+          <div class="tw" id="htbl"></div>
+        </div>
+      </section>
+      <section class="v" id="profile">
+        <div class="card">
+          <h3>My profile</h3>
+          <div id="profv"></div>
+        </div>
+      </section>
+      <section class="v" id="settings">
+        <div class="card">
+          <h3>Personal details</h3>
+          <div id="setv"></div>
+          <div class="bar bar-flush">
+            <button class="b p" data-a="myinfo">Edit my details</button>
+            <button class="b" data-a="mypw">Change password</button>
+          </div>
+        </div>
+        <div class="card gap-top">
+          <h3>Account</h3>
+          <p class="mu flush">
+            Deactivating signs you out. An administrator must reactivate your
+            account.
+          </p>
+          <div class="bar bar-flush">
+            <button class="b d" data-a="deactivate">
+              Deactivate my account
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+    <dialog id="dlg"></dialog>
+    <div id="login">
+      <div class="lg">
+        <div class="lgl">
+          <div class="brand">
+            <span class="ms">construction</span>
+            <div>
+              <b>Stock Keeper</b>
+              <small>Building &amp; contractor supply</small>
+            </div>
+          </div>
+          <div>
+            <h2>Run every branch from one place.</h2>
+            <p>
+              Inventory, sales and supplier management for your whole store.
+            </p>
+          </div>
+        </div>
+        <form class="lgr" id="lf" novalidate>
+          <button
+            type="button"
+            class="b lgt"
+            id="lth"
+            aria-label="Toggle dark mode"
+          >
+            <span class="ms">contrast</span>
+          </button>
+          <h2>Welcome back</h2>
+          <p class="mu lead">Sign in to manage stock, sales and your team.</p>
+          <label
+            >Username or email<input
+              id="lu"
+              type="text"
+              autocomplete="username"
+              autocapitalize="none"
+              autocorrect="off"
+              spellcheck="false"
+              placeholder="e.g. juan.delacruz" /><small class="er"></small></label
+          ><label
+            >Password<span class="pw"
+              ><input
+                id="lp"
+                type="password"
+                autocomplete="current-password"
+                placeholder="Enter your password"
+              /><button
+                type="button"
+                class="pwt"
+                aria-label="Show password"
+                aria-pressed="false"
+              >
+                <span class="ms">visibility</span>
+              </button></span
+            ><small class="er"></small></label
+          ><button class="b p w-100 mt-2">Sign in</button>
+          <p class="mu mt-3 mb-0">
+            Accounts are created by an administrator. Contact your administrator
+            if you need access.
+          </p>
+        </form>
+      </div>
+    </div>
+    <div id="toasts" aria-live="polite"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <script src="app.js?v=202610221600"></script>
+  </body>
+</html>
